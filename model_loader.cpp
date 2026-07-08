@@ -21,11 +21,67 @@
 #include <cctype>
 #include <filesystem>
 #include <iostream>
+#include <initializer_list>
 #include <numeric>
 #include <set>
 #include <tiny_gltf.h>
 
 #include "mikktspace.h"
+
+namespace {
+std::string ToLowerCopy(std::string text) {
+  std::transform(text.begin(), text.end(), text.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return text;
+}
+
+bool ContainsAny(const std::string& text, std::initializer_list<const char*> needles) {
+  for (const char* needle : needles) {
+    if (text.find(needle) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+LightGroup ClassifyLightGroup(ExtractedLight::Type type,
+                              const std::string& sourceName,
+                              const std::string& sourceMaterial,
+                              const std::string& sourceNodeName,
+                              const std::string& sourceNodePath) {
+  std::string haystack = ToLowerCopy(sourceName + " " + sourceMaterial + " " + sourceNodeName + " " + sourceNodePath);
+
+  if (type == ExtractedLight::Type::Directional || ContainsAny(haystack, {" sun", "sun_", "_sun", "/sun"})) {
+    return LightGroup::SunSky;
+  }
+
+  if (ContainsAny(haystack, {"stringlight", "string_light", "stringlights"})) {
+    return LightGroup::StringLights;
+  }
+  if (ContainsAny(haystack, {"ceiling_light", "ceiling lamp", "ceiling_lamp", "paris_ceiling"})) {
+    return LightGroup::CeilingLamps;
+  }
+  if (ContainsAny(haystack, {"wall_light_interior", "wall light interior", "wall_bulb", "wall bulb"})) {
+    return LightGroup::IndoorWallLamps;
+  }
+  if (ContainsAny(haystack, {"streetlight", "street_light", "streetwalllight", "street wall light", "hanging"})) {
+    return LightGroup::StreetLamps;
+  }
+  if (ContainsAny(haystack, {"lantern"})) {
+    return LightGroup::BistroLanterns;
+  }
+  if (ContainsAny(haystack, {"shopsign", "shop_sign", "shop sign", "bakery", "book_store", "bookstore", "pharmacy", "letters"})) {
+    return LightGroup::ShopSigns;
+  }
+
+  // Bistro's bright generic bulb material is used mostly by exterior street/hanging lamps.
+  if (ContainsAny(haystack, {"bulb_light", "light_bulb", "_bulb", " bulb"})) {
+    return LightGroup::StreetLamps;
+  }
+
+  return LightGroup::OtherEmissive;
+}
+}
 
 // This struct acts as a bridge between the C-style MikkTSpace callbacks
 // and our C++ MaterialMesh vertex data. It's passed via the m_pUserData pointer.
@@ -1003,6 +1059,7 @@ bool ModelLoader::ParseGLTF(const std::string& filename, Model* model) {
 
   // Process scene hierarchy to get node transforms for meshes
   std::map<int, std::vector<glm::mat4>> meshInstanceTransforms; // Map from mesh index to all instance transforms
+  std::map<int, std::vector<MaterialMesh::InstanceMetadata>> meshInstanceMetadata; // Parallel metadata for light grouping/debugging
   std::unordered_map<int, glm::mat4> animatedNodeTransforms; // Map from animated node index to world transform
   std::unordered_map<int, int> animatedNodeMeshes; // Map from animated node index to mesh index
 
@@ -1076,12 +1133,14 @@ bool ModelLoader::ParseGLTF(const std::string& filename, Model* model) {
   };
 
   // Recursive function to traverse scene hierarchy
-  std::function < void(int, const glm::mat4 &) > traverseNode = [&](int nodeIndex, const glm::mat4& parentTransform) {
+  std::function < void(int, const glm::mat4 &, const std::string &) > traverseNode = [&](int nodeIndex, const glm::mat4& parentTransform, const std::string& parentPath) {
     if (nodeIndex < 0 || nodeIndex >= gltfModel.nodes.size()) {
       return;
     }
 
     const tinygltf::Node& node = gltfModel.nodes[nodeIndex];
+    std::string nodeName = node.name.empty() ? ("node_" + std::to_string(nodeIndex)) : node.name;
+    std::string nodePath = parentPath.empty() ? nodeName : (parentPath + "/" + nodeName);
 
     // Calculate this node's transform
     glm::mat4 nodeTransform = calculateNodeTransform(node);
@@ -1090,6 +1149,7 @@ bool ModelLoader::ParseGLTF(const std::string& filename, Model* model) {
     // If this node has a mesh, add the transform to the instances list
     if (node.mesh >= 0 && node.mesh < gltfModel.meshes.size()) {
       meshInstanceTransforms[node.mesh].push_back(worldTransform);
+      meshInstanceMetadata[node.mesh].push_back(MaterialMesh::InstanceMetadata{nodeName, nodePath});
     }
 
     // If this node is animated, capture its world transform and mesh reference
@@ -1107,7 +1167,7 @@ bool ModelLoader::ParseGLTF(const std::string& filename, Model* model) {
 
     // Recursively process children
     for (int childIndex : node.children) {
-      traverseNode(childIndex, worldTransform);
+      traverseNode(childIndex, worldTransform, nodePath);
     }
   };
 
@@ -1119,7 +1179,7 @@ bool ModelLoader::ParseGLTF(const std::string& filename, Model* model) {
 
       // Traverse all root nodes in the scene
       for (int rootNodeIndex : scene.nodes) {
-        traverseNode(rootNodeIndex, glm::mat4(1.0f));
+        traverseNode(rootNodeIndex, glm::mat4(1.0f), "");
       }
     }
   }
@@ -1163,11 +1223,20 @@ bool ModelLoader::ParseGLTF(const std::string& filename, Model* model) {
     // Check if this mesh has instances
     auto instanceIt = meshInstanceTransforms.find(static_cast<int>(meshIndex));
     std::vector<glm::mat4> instances;
+    std::vector<MaterialMesh::InstanceMetadata> instanceMetadata;
 
     if (instanceIt == meshInstanceTransforms.end() || instanceIt->second.empty()) {
       instances.emplace_back(1.0f); // Identity transform at origin
+      std::string meshName = mesh.name.empty() ? ("mesh_" + std::to_string(meshIndex)) : mesh.name;
+      instanceMetadata.push_back(MaterialMesh::InstanceMetadata{meshName, meshName});
     } else {
       instances = instanceIt->second;
+      auto metadataIt = meshInstanceMetadata.find(static_cast<int>(meshIndex));
+      if (metadataIt != meshInstanceMetadata.end() && metadataIt->second.size() == instances.size()) {
+        instanceMetadata = metadataIt->second;
+      } else {
+        instanceMetadata.resize(instances.size());
+      }
     }
 
     // Process each primitive (material group) in this mesh
@@ -1350,8 +1419,10 @@ bool ModelLoader::ParseGLTF(const std::string& filename, Model* model) {
       }
 
       // Add all instances to this MaterialMesh (both new and existing geometry)
-      for (const glm::mat4& instanceTransform : instances) {
-        materialMesh.AddInstance(instanceTransform, static_cast<uint32_t>(materialIndex));
+      for (size_t instanceIndex = 0; instanceIndex < instances.size(); ++instanceIndex) {
+        const MaterialMesh::InstanceMetadata metadata =
+          instanceIndex < instanceMetadata.size() ? instanceMetadata[instanceIndex] : MaterialMesh::InstanceMetadata{};
+        materialMesh.AddInstance(instances[instanceIndex], static_cast<uint32_t>(materialIndex), metadata);
       }
     }
   }
@@ -1729,7 +1800,10 @@ std::vector<ExtractedLight> ModelLoader::GetExtractedLights(const std::string& m
 
           // Create emissive light(s) transformed by each instance's model matrix
           if (!materialMesh.instances.empty()) {
-            for (const auto& inst : materialMesh.instances) {
+            for (size_t instanceIndex = 0; instanceIndex < materialMesh.instances.size(); ++instanceIndex) {
+              const auto& inst = materialMesh.instances[instanceIndex];
+              const MaterialMesh::InstanceMetadata metadata =
+                instanceIndex < materialMesh.instanceMetadata.size() ? materialMesh.instanceMetadata[instanceIndex] : MaterialMesh::InstanceMetadata{};
               glm::mat4 M = inst.getModelMatrix();
               glm::vec3 worldCenter = glm::vec3(M * glm::vec4(center, 1.0f));
               glm::mat3 normalMat = glm::transpose(glm::inverse(glm::mat3(M)));
@@ -1757,14 +1831,23 @@ std::vector<ExtractedLight> ModelLoader::GetExtractedLights(const std::string& m
               // Clamp to a reasonable band to avoid blowing out exposure
               emissiveLight.intensity = glm::clamp(intensityRaw, 0.25f, 50.0f);
               emissiveLight.range = worldRange;
+              emissiveLight.sourceName = materialMesh.materialName;
               emissiveLight.sourceMaterial = material->GetName();
+              emissiveLight.sourceNodeName = metadata.nodeName;
+              emissiveLight.sourceNodePath = metadata.nodePath;
+              emissiveLight.group = ClassifyLightGroup(emissiveLight.type,
+                                                       emissiveLight.sourceName,
+                                                       emissiveLight.sourceMaterial,
+                                                       emissiveLight.sourceNodeName,
+                                                       emissiveLight.sourceNodePath);
               emissiveLight.direction = worldNormal;
 
               lights.push_back(emissiveLight);
 
               std::cout << "Created emissive light from material '" << material->GetName()
                   << "' at world position (" << worldCenter.x << ", " << worldCenter.y << ", " << worldCenter.z
-                  << ") with intensity " << emissiveIntensity << std::endl;
+                  << ") with intensity " << emissiveIntensity
+                  << " group=" << LightGroupToString(emissiveLight.group) << std::endl;
             }
           } else {
             // No explicit instances; use identity transform
@@ -1781,14 +1864,21 @@ std::vector<ExtractedLight> ModelLoader::GetExtractedLights(const std::string& m
             float intensityRaw = strength * chromaMag * areaProxy * 0.08f;
             emissiveLight.intensity = glm::clamp(intensityRaw, 0.25f, 50.0f);
             emissiveLight.range = worldRange;
+            emissiveLight.sourceName = materialMesh.materialName;
             emissiveLight.sourceMaterial = material->GetName();
+            emissiveLight.group = ClassifyLightGroup(emissiveLight.type,
+                                                     emissiveLight.sourceName,
+                                                     emissiveLight.sourceMaterial,
+                                                     emissiveLight.sourceNodeName,
+                                                     emissiveLight.sourceNodePath);
             emissiveLight.direction = avgNormal;
 
             lights.push_back(emissiveLight);
 
             std::cout << "Created emissive light from material '" << material->GetName()
                 << "' at position (" << center.x << ", " << center.y << ", " << center.z
-                << ") with intensity " << emissiveIntensity << std::endl;
+                << ") with intensity " << emissiveIntensity
+                << " group=" << LightGroupToString(emissiveLight.group) << std::endl;
           }
         }
       }
@@ -1858,6 +1948,10 @@ bool ModelLoader::ExtractPunctualLights(const tinygltf::Model& gltfModel, const 
 
         ExtractedLight light;
 
+        if (lightValue.Has("name") && lightValue.Get("name").IsString()) {
+          light.sourceName = lightValue.Get("name").Get<std::string>();
+        }
+
         // Parse light type
         if (lightValue.Has("type") && lightValue.Get("type").IsString()) {
           std::string type = lightValue.Get("type").Get<std::string>();
@@ -1902,9 +1996,11 @@ bool ModelLoader::ExtractPunctualLights(const tinygltf::Model& gltfModel, const 
           }
         }
 
+        light.group = ClassifyLightGroup(light.type, light.sourceName, light.sourceMaterial, light.sourceNodeName, light.sourceNodePath);
         lights.push_back(light);
         std::cout << "    Parsed punctual light " << i << ": type=" << static_cast<int>(light.type)
-            << ", intensity=" << light.intensity << std::endl;
+            << ", intensity=" << light.intensity
+            << ", group=" << LightGroupToString(light.group) << std::endl;
       }
     }
   } else {
@@ -1988,6 +2084,8 @@ bool ModelLoader::ExtractPunctualLights(const tinygltf::Model& gltfModel, const 
         int lightIndex = nodeExtension.Get("light").Get<int>();
         if (lightIndex >= 0 && lightIndex < static_cast<int>(lights.size())) {
           const glm::mat4& W = nodeWorldTransforms[nodeIndex];
+          lights[lightIndex].sourceNodeName = node.name.empty() ? ("node_" + std::to_string(nodeIndex)) : node.name;
+          lights[lightIndex].sourceNodePath = lights[lightIndex].sourceNodeName;
           // Position from world transform origin
           glm::vec3 pos = glm::vec3(W * glm::vec4(0, 0, 0, 1));
           lights[lightIndex].position = pos;
@@ -1997,8 +2095,13 @@ bool ModelLoader::ExtractPunctualLights(const tinygltf::Model& gltfModel, const 
             lights[lightIndex].type == ExtractedLight::Type::Spot) {
             glm::mat3 rot = glm::mat3(W);
             glm::vec3 dir = glm::normalize(rot * glm::vec3(0.0f, 0.0f, -1.0f));
-            lights[lightIndex].direction = dir;
+              lights[lightIndex].direction = dir;
           }
+          lights[lightIndex].group = ClassifyLightGroup(lights[lightIndex].type,
+                                                        lights[lightIndex].sourceName,
+                                                        lights[lightIndex].sourceMaterial,
+                                                        lights[lightIndex].sourceNodeName,
+                                                        lights[lightIndex].sourceNodePath);
 
           std::cout << "    Light " << lightIndex << " positioned at ("
               << lights[lightIndex].position.x << ", "

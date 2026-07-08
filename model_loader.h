@@ -90,6 +90,47 @@ class Material {
 };
 
 /**
+ * @brief High-level light groups used for scene lighting controls.
+ */
+enum class LightGroup : uint32_t {
+  SunSky = 0,
+  StreetLamps,
+  StringLights,
+  IndoorWallLamps,
+  CeilingLamps,
+  BistroLanterns,
+  ShopSigns,
+  OtherEmissive,
+  Count
+};
+
+inline constexpr size_t LIGHT_GROUP_COUNT = static_cast<size_t>(LightGroup::Count);
+
+inline const char* LightGroupToString(LightGroup group) {
+  switch (group) {
+    case LightGroup::SunSky:
+      return "Sun / Sky";
+    case LightGroup::StreetLamps:
+      return "Street lamps";
+    case LightGroup::StringLights:
+      return "String lights";
+    case LightGroup::IndoorWallLamps:
+      return "Indoor wall lamps";
+    case LightGroup::CeilingLamps:
+      return "Ceiling lamps";
+    case LightGroup::BistroLanterns:
+      return "Bistro lanterns";
+    case LightGroup::ShopSigns:
+      return "Shop signs";
+    case LightGroup::OtherEmissive:
+      return "Other emissive";
+    case LightGroup::Count:
+      break;
+  }
+  return "Unknown";
+}
+
+/**
  * @brief Structure representing a light source extracted from GLTF.
  */
 struct ExtractedLight {
@@ -108,7 +149,11 @@ struct ExtractedLight {
   float range = 100.0f; // For point/spotlights
   float innerConeAngle = 0.0f; // For spotlights
   float outerConeAngle = 0.785398f; // For spotlights (45 degrees)
+  LightGroup group = LightGroup::OtherEmissive;
+  std::string sourceName; // GLTF light name or a readable generated name
   std::string sourceMaterial; // Name of source material (for emissive lights)
+  std::string sourceNodeName; // GLTF node name that produced this light, when available
+  std::string sourceNodePath; // Full-ish scene hierarchy path for better grouping/debugging
 };
 
 /**
@@ -199,6 +244,11 @@ struct Animation {
  * @brief Structure representing mesh data for a specific material.
  */
 struct MaterialMesh {
+  struct InstanceMetadata {
+    std::string nodeName;
+    std::string nodePath;
+  };
+
   int materialIndex;
   std::string materialName;
   std::vector<Vertex> vertices;
@@ -217,6 +267,7 @@ struct MaterialMesh {
 
   // Instancing support
   std::vector<InstanceData> instances; // Instance data for instanced rendering
+  std::vector<InstanceMetadata> instanceMetadata; // CPU-only source node metadata, parallel to instances
   bool isInstanced = false; // Flag to indicate if this mesh uses instancing
 
   /**
@@ -224,10 +275,11 @@ struct MaterialMesh {
 	 * @param transform The transform matrix for this instance.
 	 * @param matIndex The material index for this instance (default: use materialIndex).
 	 */
-  void AddInstance(const glm::mat4& transform, uint32_t matIndex = 0) {
+  void AddInstance(const glm::mat4& transform, uint32_t matIndex = 0, const InstanceMetadata& metadata = {}) {
     if (matIndex == 0)
       matIndex = static_cast<uint32_t>(materialIndex);
     instances.emplace_back(transform, matIndex);
+    instanceMetadata.push_back(metadata);
     isInstanced = instances.size() > 1;
   }
 

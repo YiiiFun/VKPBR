@@ -1081,13 +1081,24 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
   bool rayQueryRenderedThisFrame = false;
 
   // --- Extract lights for the frame ---
-  // Build a single light list once per frame (emissive lights only for this scene)
+  // Build a single light list once per frame, applying high-level LightGroup controls.
   std::vector<ExtractedLight> lightsSubset;
+  lastFrameLightGroupCounts.fill(0);
   if (!staticLights.empty()) {
     lightsSubset.reserve(std::min(staticLights.size(), static_cast<size_t>(MAX_ACTIVE_LIGHTS)));
     for (const auto& L : staticLights) {
-      // Include all lights (Directional, Point, Emissive) up to the limit
-      lightsSubset.push_back(L);
+      size_t groupIndex = static_cast<size_t>(L.group);
+      if (groupIndex >= LIGHT_GROUP_COUNT) {
+        groupIndex = static_cast<size_t>(LightGroup::OtherEmissive);
+      }
+      if (!lightGroupEnabled[groupIndex]) {
+        continue;
+      }
+
+      ExtractedLight controlledLight = L;
+      controlledLight.intensity *= lightGroupIntensityScale[groupIndex];
+      lightsSubset.push_back(controlledLight);
+      ++lastFrameLightGroupCounts[groupIndex];
       if (lightsSubset.size() >= MAX_ACTIVE_LIGHTS)
         break;
     }
@@ -1751,19 +1762,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
 
   // Ensure light buffers are sufficiently large before recording to avoid resizing while in use
   {
-    // Reserve capacity based on emissive lights only (punctual lights disabled for now)
-    size_t desiredLightCapacity = 0;
-    if (!staticLights.empty()) {
-      size_t emissiveCount = 0;
-      for (const auto& L : staticLights) {
-        if (L.type == ExtractedLight::Type::Emissive) {
-          ++emissiveCount;
-          if (emissiveCount >= MAX_ACTIVE_LIGHTS)
-            break;
-        }
-      }
-      desiredLightCapacity = emissiveCount;
-    }
+    size_t desiredLightCapacity = lastFrameLightCount;
     if (desiredLightCapacity > 0) {
       createOrResizeLightStorageBuffers(desiredLightCapacity);
       // Ensure compute (binding 0) sees the current frame's lights buffer
@@ -2228,6 +2227,44 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         ImGui::Checkbox("Enable Thick Glass", &enableThickGlass);
         ImGui::SliderFloat("Thickness Clamp (m)", &thickGlassThicknessClamp, 0.0f, 0.5f, "%.3f");
         ImGui::SliderFloat("Absorption Scale", &thickGlassAbsorptionScale, 0.0f, 4.0f, "%.2f");
+      }
+
+      // === LIGHT GROUP CONTROLS ===
+      ImGui::Separator();
+      if (ImGui::CollapsingHeader("Light Groups", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Text("Active lights this frame: %u / %zu", lastFrameLightCount, staticLights.size());
+        ImGui::TextWrapped("Bistro only contains one real punctual Sun light; street, string, shop and indoor lamps are generated from emissive meshes.");
+
+        if (ImGui::Button("Day preset")) {
+          lightGroupEnabled.fill(false);
+          lightGroupEnabled[static_cast<size_t>(LightGroup::SunSky)] = true;
+          lightGroupIntensityScale.fill(1.0f);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Warm evening preset")) {
+          lightGroupEnabled.fill(true);
+          lightGroupIntensityScale.fill(1.0f);
+          lightGroupIntensityScale[static_cast<size_t>(LightGroup::SunSky)] = 0.08f;
+          lightGroupIntensityScale[static_cast<size_t>(LightGroup::StreetLamps)] = 1.5f;
+          lightGroupIntensityScale[static_cast<size_t>(LightGroup::StringLights)] = 1.5f;
+          lightGroupIntensityScale[static_cast<size_t>(LightGroup::IndoorWallLamps)] = 1.2f;
+          lightGroupIntensityScale[static_cast<size_t>(LightGroup::CeilingLamps)] = 1.2f;
+          lightGroupIntensityScale[static_cast<size_t>(LightGroup::BistroLanterns)] = 1.2f;
+          lightGroupIntensityScale[static_cast<size_t>(LightGroup::ShopSigns)] = 1.1f;
+        }
+
+        for (size_t i = 0; i < LIGHT_GROUP_COUNT; ++i) {
+          LightGroup group = static_cast<LightGroup>(i);
+          ImGui::PushID(static_cast<int>(i));
+          ImGui::Checkbox(LightGroupToString(group), &lightGroupEnabled[i]);
+          ImGui::SameLine();
+          ImGui::TextDisabled("active: %u", lastFrameLightGroupCounts[i]);
+
+          float minScale = (group == LightGroup::SunSky) ? 0.02f : 0.0f;
+          float maxScale = (group == LightGroup::SunSky) ? 1.0f : 5.0f;
+          ImGui::SliderFloat("Intensity", &lightGroupIntensityScale[i], minScale, maxScale, "%.2f");
+          ImGui::PopID();
+        }
       }
 
       // === SHARED OPTIONS (BOTH MODES) ===

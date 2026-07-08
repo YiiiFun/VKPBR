@@ -17,6 +17,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -1645,6 +1646,18 @@ class Renderer {
 
     // Static lights loaded during model initialization
     std::vector<ExtractedLight> staticLights;
+    std::array<bool, LIGHT_GROUP_COUNT> lightGroupEnabled = [] {
+      std::array<bool, LIGHT_GROUP_COUNT> enabled{};
+      enabled.fill(false);
+      enabled[static_cast<size_t>(LightGroup::SunSky)] = true;
+      return enabled;
+    }();
+    std::array<float, LIGHT_GROUP_COUNT> lightGroupIntensityScale = [] {
+      std::array<float, LIGHT_GROUP_COUNT> scale{};
+      scale.fill(1.0f);
+      return scale;
+    }();
+    std::array<uint32_t, LIGHT_GROUP_COUNT> lastFrameLightGroupCounts{};
 
     // Dynamic lighting system using storage buffers
     struct LightStorageBuffer {
