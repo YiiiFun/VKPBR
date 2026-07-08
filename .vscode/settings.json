@@ -1,0 +1,7 @@
+{
+  "cmake.sourceDirectory": "${workspaceFolder}",
+  "cmake.useCMakePresets": "always",
+  "cmake.configureOnOpen": false,
+  "C_Cpp.formatting": "clangFormat",
+  "files.encoding": "utf8"
+}

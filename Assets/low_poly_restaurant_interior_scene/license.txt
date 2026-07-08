@@ -1,0 +1,11 @@
+Model Information:
+* title:	Low Poly Restaurant Interior Scene
+* source:	https://sketchfab.com/3d-models/low-poly-restaurant-interior-scene-ce81c3ee5c45471ea75fb6222fd64f9e
+* author:	MarkoJantti (https://sketchfab.com/MarkoJantti)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Low Poly Restaurant Interior Scene" (https://sketchfab.com/3d-models/low-poly-restaurant-interior-scene-ce81c3ee5c45471ea75fb6222fd64f9e) by MarkoJantti (https://sketchfab.com/MarkoJantti) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

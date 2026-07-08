@@ -1,0 +1,5 @@
+/build/
+/install/
+/crashes/
+/shaders/*.spv
+*.log

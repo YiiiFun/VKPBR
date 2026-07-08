@@ -1,0 +1,23 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cmake-configure-mingw64",
+      "type": "process",
+      "command": "cmake",
+      "args": ["--preset", "mingw64"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "cmake-build-mingw64",
+      "type": "process",
+      "command": "cmake",
+      "args": ["--build", "--preset", "mingw64-debug"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "dependsOn": "cmake-configure-mingw64",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": "$gcc"
+    }
+  ]
+}
