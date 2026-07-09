@@ -259,7 +259,7 @@ class Engine
 		float     pitch                   = 0.0f;
 		bool      firstMouse              = true;
 		bool      firstRightMouse         = true;
-		float     cameraSpeed             = 5.0f;
+		float     cameraSpeed             = 10.0f;
 		float     mouseSensitivity        = 0.1f;
 		float     panSensitivity          = 0.005f;
 		float     scrollStep              = 0.75f;

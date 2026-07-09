@@ -1142,7 +1142,7 @@ class Renderer {
 
     // Ray Query tuning
     int rayQueryMaxBounces = 1; // 0 = no secondary rays, 1 = one-bounce reflection/refraction
-    bool enableRayQueryShadows = true; // Hard shadows for Ray Query direct lighting (shadow rays)
+    bool enableRayQueryShadows = false; // Hard shadows for Ray Query direct lighting (shadow rays)
     int rayQueryShadowSampleCount = 1; // 1 = hard; >1 enables soft-shadow sampling in the shader
     float rayQueryShadowSoftness = 0.0f; // 0 = hard; otherwise scales effective light radius (fraction of range)
     // Thick-glass controls (RQ-only)
@@ -1876,8 +1876,8 @@ class Renderer {
     bool reflectionResourcesDirty = false; // recreate reflection RTs at safe point
 
     // --- Ray query rendering options ---
-    bool enableRayQueryReflections = true; // UI toggle to enable reflections in ray query mode
-    bool enableRayQueryTransparency = true; // UI toggle to enable transparency/refraction in ray query mode
+    bool enableRayQueryReflections = false; // UI toggle to enable reflections in ray query mode
+    bool enableRayQueryTransparency = false; // UI toggle to enable transparency/refraction in ray query mode
 
     // ImGui panel extension callbacks (Course modules / plugins)
     ImGuiPanelCallback imguiPanelCallback;
