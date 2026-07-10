@@ -42,7 +42,7 @@ class CameraComponent : public Component
 	ProjectionType projectionType = ProjectionType::Perspective;
 
 	// Perspective projection parameters
-	float fieldOfView = 45.0f;
+	float fieldOfView = 70.0f;
 	float aspectRatio = 16.0f / 9.0f;
 
 	// Orthographic projection parameters

@@ -34,6 +34,33 @@
 #include <sstream>
 #include <stdexcept>
 
+namespace {
+bool IsBistroStreetLampProxy(const ExtractedLight& light) {
+  return light.type == ExtractedLight::Type::Point &&
+         light.group == LightGroup::StreetLamps &&
+         light.sourceMaterial == "LMBR_000018b_bulb";
+}
+
+glm::vec3 ColorTemperatureToRgb(float kelvin) {
+  const float temperature = std::clamp(kelvin, 1000.0f, 40000.0f) / 100.0f;
+  float red = 255.0f;
+  float green = 255.0f;
+  float blue = 255.0f;
+
+  if (temperature <= 66.0f) {
+    green = 99.4708025861f * std::log(temperature) - 161.1195681661f;
+    blue = temperature <= 19.0f
+      ? 0.0f
+      : 138.5177312231f * std::log(temperature - 10.0f) - 305.0447927307f;
+  } else {
+    red = 329.698727446f * std::pow(temperature - 60.0f, -0.1332047592f);
+    green = 288.1221695283f * std::pow(temperature - 60.0f, -0.0755148492f);
+  }
+
+  return glm::clamp(glm::vec3(red, green, blue), 0.0f, 255.0f) / 255.0f;
+}
+}
+
 // ===================== Culling helpers implementation =====================
 
 Renderer::FrustumPlanes Renderer::extractFrustumPlanes(const glm::mat4& vp) {
@@ -849,6 +876,9 @@ void Renderer::prepareFrameUboTemplate(CameraComponent* camera, ImGuiSystem* img
   frameUboTemplate.lightCount = static_cast<int>(lastFrameLightCount);
   frameUboTemplate.exposure = std::clamp(this->exposure, 0.2f, 4.0f);
   frameUboTemplate.gamma = this->gamma;
+  // Preserve the original raster lighting baseline. Day/Night sky ambient is
+  // a Ray Query control and must not alter rasterization output.
+  frameUboTemplate.scaleIBLAmbient = 0.0f;
   frameUboTemplate.screenDimensions = glm::vec2(swapChainExtent.width, swapChainExtent.height);
   frameUboTemplate.nearZ = camera->GetNearPlane();
   frameUboTemplate.farZ = camera->GetFarPlane();
@@ -1096,6 +1126,11 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       }
 
       ExtractedLight controlledLight = L;
+      if (IsBistroStreetLampProxy(controlledLight)) {
+        controlledLight.color = ColorTemperatureToRgb(streetLampTemperatureKelvin);
+        controlledLight.intensity = streetLampIntensity;
+        controlledLight.range = streetLampRange;
+      }
       controlledLight.intensity *= lightGroupIntensityScale[groupIndex];
       lightsSubset.push_back(controlledLight);
       ++lastFrameLightGroupCounts[groupIndex];
@@ -1882,7 +1917,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         ubo.gamma = std::clamp(gamma, 1.6f, 2.6f);
         // Match raster convention: ambient scale factor for simple IBL/ambient term.
         // (Raster defaults to ~1.0 in the main pass; keep Ray Query consistent.)
-        ubo.scaleIBLAmbient = 1.0f;
+        ubo.scaleIBLAmbient = skyAmbientScale;
         // Provide the per-frame light count so the ray query shader can iterate lights.
         ubo.lightCount = static_cast<int>(lastFrameLightCount);
         ubo.screenDimensions = glm::vec2(swapChainExtent.width, swapChainExtent.height);
@@ -2233,25 +2268,32 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       ImGui::Separator();
       if (ImGui::CollapsingHeader("Light Groups", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Text("Active lights this frame: %u / %zu", lastFrameLightCount, staticLights.size());
-        ImGui::TextWrapped("Bistro only contains one real punctual Sun light; street, string, shop and indoor lamps are generated from emissive meshes.");
+        ImGui::TextWrapped("Street lamps use point-light proxies placed at the centers of 28 physical bulb meshes. Other local groups are approximated from emissive meshes.");
 
+        const bool rayQueryPresetAvailable =
+          currentRenderMode == RenderMode::RayQuery && rayQueryEnabled && accelerationStructureEnabled;
+        if (!rayQueryPresetAvailable) ImGui::BeginDisabled();
         if (ImGui::Button("Day preset")) {
           lightGroupEnabled.fill(false);
           lightGroupEnabled[static_cast<size_t>(LightGroup::SunSky)] = true;
           lightGroupIntensityScale.fill(1.0f);
+          skyAmbientScale = 1.0f;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Warm evening preset")) {
-          lightGroupEnabled.fill(true);
+        if (ImGui::Button("Night preset")) {
+          lightGroupEnabled.fill(false);
+          lightGroupEnabled[static_cast<size_t>(LightGroup::SunSky)] = true;
+          lightGroupEnabled[static_cast<size_t>(LightGroup::StreetLamps)] = true;
           lightGroupIntensityScale.fill(1.0f);
-          lightGroupIntensityScale[static_cast<size_t>(LightGroup::SunSky)] = 0.08f;
-          lightGroupIntensityScale[static_cast<size_t>(LightGroup::StreetLamps)] = 1.5f;
-          lightGroupIntensityScale[static_cast<size_t>(LightGroup::StringLights)] = 1.5f;
-          lightGroupIntensityScale[static_cast<size_t>(LightGroup::IndoorWallLamps)] = 1.2f;
-          lightGroupIntensityScale[static_cast<size_t>(LightGroup::CeilingLamps)] = 1.2f;
-          lightGroupIntensityScale[static_cast<size_t>(LightGroup::BistroLanterns)] = 1.2f;
-          lightGroupIntensityScale[static_cast<size_t>(LightGroup::ShopSigns)] = 1.1f;
+          lightGroupIntensityScale[static_cast<size_t>(LightGroup::SunSky)] = 0.02f;
+          skyAmbientScale = 0.0f;
         }
+        if (!rayQueryPresetAvailable) ImGui::EndDisabled();
+        if (!rayQueryPresetAvailable) {
+          ImGui::TextDisabled("Day/Night presets are available in Ray Query mode only.");
+        }
+
+        ImGui::SliderFloat("Sky ambient", &skyAmbientScale, 0.0f, 2.0f, "%.2f");
 
         for (size_t i = 0; i < LIGHT_GROUP_COUNT; ++i) {
           LightGroup group = static_cast<LightGroup>(i);
@@ -2260,9 +2302,34 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
           ImGui::SameLine();
           ImGui::TextDisabled("active: %u", lastFrameLightGroupCounts[i]);
 
-          float minScale = (group == LightGroup::SunSky) ? 0.02f : 0.0f;
-          float maxScale = (group == LightGroup::SunSky) ? 1.0f : 5.0f;
-          ImGui::SliderFloat("Intensity", &lightGroupIntensityScale[i], minScale, maxScale, "%.2f");
+          if (group == LightGroup::StreetLamps) {
+            const size_t proxyCount = static_cast<size_t>(std::count_if(
+              staticLights.begin(), staticLights.end(), IsBistroStreetLampProxy));
+            ImGui::Indent();
+            ImGui::SliderFloat("Color temperature (K)", &streetLampTemperatureKelvin,
+                               1500.0f, 6500.0f, "%.0f K");
+            ImGui::SliderFloat("Per-lamp intensity", &streetLampIntensity,
+                               0.0f, 200.0f, "%.1f");
+            ImGui::SliderFloat("Per-lamp range (m)", &streetLampRange,
+                               0.5f, 20.0f, "%.1f m");
+            const glm::vec3 previewColor = ColorTemperatureToRgb(streetLampTemperatureKelvin);
+            ImGui::ColorButton("Temperature preview",
+                               ImVec4(previewColor.r, previewColor.g, previewColor.b, 1.0f),
+                               ImGuiColorEditFlags_NoTooltip, ImVec2(48.0f, 18.0f));
+            ImGui::SameLine();
+            ImGui::Text("Bulb lights: %zu / 28", proxyCount);
+            if (ImGui::Button("Reset street lamps")) {
+              streetLampTemperatureKelvin = 2700.0f;
+              streetLampIntensity = 60.0f;
+              streetLampRange = 10.0f;
+              lightGroupIntensityScale[i] = 1.0f;
+            }
+            ImGui::Unindent();
+          } else {
+            float minScale = (group == LightGroup::SunSky) ? 0.02f : 0.0f;
+            float maxScale = (group == LightGroup::SunSky) ? 1.0f : 5.0f;
+            ImGui::SliderFloat("Intensity", &lightGroupIntensityScale[i], minScale, maxScale, "%.2f");
+          }
           ImGui::PopID();
         }
       }

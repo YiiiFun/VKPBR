@@ -74,11 +74,6 @@ LightGroup ClassifyLightGroup(ExtractedLight::Type type,
     return LightGroup::ShopSigns;
   }
 
-  // Bistro's bright generic bulb material is used mostly by exterior street/hanging lamps.
-  if (ContainsAny(haystack, {"bulb_light", "light_bulb", "_bulb", " bulb"})) {
-    return LightGroup::StreetLamps;
-  }
-
   return LightGroup::OtherEmissive;
 }
 }
@@ -320,6 +315,18 @@ void ModelLoader::ProcessMaterials(const tinygltf::Model& gltfModel,
       }
     } else {
       material->emissiveStrength = 0.00058f;
+    }
+
+    // The Bistro street lamp is authored as a tiny emissive bulb behind a
+    // separate transmissive glass enclosure. Preserve a bright visible bulb
+    // and approximate the strongly illuminated white shade seen in the
+    // reference renderer. The glass is visual emission only; it is excluded
+    // from generated light proxies in GetExtractedLights().
+    if (material->GetName() == "LMBR_000018b_bulb") {
+      material->emissiveStrength = 1.0f;
+    } else if (material->GetName() == "LMBR_0000189_glass") {
+      material->emissive = glm::vec3(8.0f);
+      material->emissiveStrength = 1.0f;
     }
 
     // Alpha mode / cutoff
@@ -1764,6 +1771,14 @@ std::vector<ExtractedLight> ModelLoader::GetExtractedLights(const std::string& m
       auto materialIt = materials.find(materialMesh.materialName);
       if (materialIt != materials.end()) {
         const Material* material = materialIt->second.get();
+        const bool isBistroStreetBulb = material->GetName() == "LMBR_000018b_bulb";
+        const bool isBistroStreetGlass = material->GetName() == "LMBR_0000189_glass";
+
+        // The glass shade should glow visually but must not become another
+        // large emissive-bounds light source. Only the bulb creates a proxy.
+        if (isBistroStreetGlass) {
+          continue;
+        }
 
         // Check if this material has emissive properties (no threshold filtering)
         float emissiveIntensity = glm::length(material->emissive) * material->emissiveStrength;
@@ -1782,6 +1797,9 @@ std::vector<ExtractedLight> ModelLoader::GetExtractedLights(const std::string& m
           }
           glm::vec3 extent = glm::max(maxB - minB, glm::vec3(0.0f));
           float diag = glm::length(extent);
+          if (isBistroStreetBulb && !materialMesh.vertices.empty()) {
+            center = 0.5f * (minB + maxB);
+          }
           float baseRange = std::max(0.5f * diag, 0.25f); // base range in local units
 
           // Calculate a reasonable direction (average normal of the surface)
@@ -1841,6 +1859,17 @@ std::vector<ExtractedLight> ModelLoader::GetExtractedLights(const std::string& m
                                                        emissiveLight.sourceNodeName,
                                                        emissiveLight.sourceNodePath);
               emissiveLight.direction = worldNormal;
+              if (isBistroStreetBulb) {
+                // This mesh is the small physical bulb inside each standing and
+                // hanging street-lamp glass enclosure. Use its per-instance
+                // transformed center as a punctual-light proxy instead of the
+                // old large emissive-bounds approximation.
+                emissiveLight.type = ExtractedLight::Type::Point;
+                emissiveLight.color = glm::vec3(1.0f, 0.65f, 0.35f);
+                emissiveLight.intensity = 60.0f;
+                emissiveLight.range = 10.0f;
+                emissiveLight.group = LightGroup::StreetLamps;
+              }
 
               lights.push_back(emissiveLight);
 

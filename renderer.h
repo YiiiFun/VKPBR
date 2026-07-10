@@ -1658,6 +1658,10 @@ class Renderer {
       return scale;
     }();
     std::array<uint32_t, LIGHT_GROUP_COUNT> lastFrameLightGroupCounts{};
+    float streetLampTemperatureKelvin = 2700.0f;
+    float streetLampIntensity = 60.0f;
+    float streetLampRange = 10.0f;
+    float skyAmbientScale = 1.0f;
 
     // Dynamic lighting system using storage buffers
     struct LightStorageBuffer {

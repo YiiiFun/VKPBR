@@ -165,7 +165,9 @@ bool LoadGLTFModel(Engine* engine,
         if (camera) {
           camera->ForceViewMatrixUpdate(); // Only sets viewMatrixDirty flag, doesn't change camera orientation
           if (gltfCamera.isPerspective) {
-            camera->SetFieldOfView(glm::degrees(gltfCamera.fov)); // Convert radians to degrees
+            // Keep the engine's user-facing default FOV instead of letting an
+            // asset-authored camera silently override it during async loading.
+            camera->SetFieldOfView(70.0f);
             camera->SetClipPlanes(gltfCamera.nearPlane, gltfCamera.farPlane);
             if (gltfCamera.aspectRatio > 0.0f) {
               camera->SetAspectRatio(gltfCamera.aspectRatio);
