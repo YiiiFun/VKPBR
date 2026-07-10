@@ -2986,8 +2986,14 @@ void Renderer::refreshPBRForwardPlusBindingsForFrame(uint32_t frameIndex) {
 // Update the light storage buffer with current light data
 bool Renderer::updateLightStorageBuffer(uint32_t frameIndex, const std::vector<ExtractedLight>& lights, CameraComponent* camera) {
   try {
-    // Ensure buffers are large enough and properly initialized
-    if (!createOrResizeLightStorageBuffers(lights.size())) {
+    // Allocate against the complete loaded light set, not the currently
+    // enabled subset. Otherwise switching 1 -> 28 -> 64 lights can replace
+    // the VkBuffer while command recording is active, leaving Ray Query/PBR
+    // descriptor sets pointing at the previous allocation.
+    const size_t stableCapacity = std::max(
+      lights.size(),
+      std::min(staticLights.size(), static_cast<size_t>(MAX_ACTIVE_LIGHTS)));
+    if (!createOrResizeLightStorageBuffers(stableCapacity)) {
       return false;
     }
 

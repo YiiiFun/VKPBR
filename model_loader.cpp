@@ -1773,6 +1773,8 @@ std::vector<ExtractedLight> ModelLoader::GetExtractedLights(const std::string& m
         const Material* material = materialIt->second.get();
         const bool isBistroStreetBulb = material->GetName() == "LMBR_000018b_bulb";
         const bool isBistroStreetGlass = material->GetName() == "LMBR_0000189_glass";
+        const bool isBistroStringLight =
+          material->GetName().find("Paris_StringLights_01_") != std::string::npos;
 
         // The glass shade should glow visually but must not become another
         // large emissive-bounds light source. Only the bulb creates a proxy.
@@ -1782,7 +1784,7 @@ std::vector<ExtractedLight> ModelLoader::GetExtractedLights(const std::string& m
 
         // Check if this material has emissive properties (no threshold filtering)
         float emissiveIntensity = glm::length(material->emissive) * material->emissiveStrength;
-        if (emissiveIntensity >= 0.1f) {
+        if (emissiveIntensity >= 0.1f || isBistroStringLight) {
           // Calculate the center position and an approximate size of the emissive surface
           glm::vec3 center(0.0f);
           glm::vec3 minB(std::numeric_limits<float>::max());
@@ -1814,6 +1816,87 @@ std::vector<ExtractedLight> ModelLoader::GetExtractedLights(const std::string& m
             avgNormal = glm::normalize(avgNormal / static_cast<float>(materialMesh.vertices.size()));
           } else {
             avgNormal = glm::vec3(0.0f, -1.0f, 0.0f); // Default downward direction
+          }
+
+          if (isBistroStringLight && !materialMesh.vertices.empty()) {
+            // Several same-color bulbs can share one primitive while being
+            // metres apart. Cluster vertices spatially so every proxy is
+            // placed inside a real bulb rather than at a merged AABB center.
+            const size_t vertexCount = materialMesh.vertices.size();
+            std::vector<size_t> parent(vertexCount);
+            std::iota(parent.begin(), parent.end(), 0);
+            auto findRoot = [&parent](size_t vertex) {
+              size_t root = vertex;
+              while (parent[root] != root) root = parent[root];
+              while (parent[vertex] != vertex) {
+                const size_t next = parent[vertex];
+                parent[vertex] = root;
+                vertex = next;
+              }
+              return root;
+            };
+            auto unite = [&parent, &findRoot](size_t a, size_t b) {
+              a = findRoot(a);
+              b = findRoot(b);
+              if (a != b) parent[b] = a;
+            };
+
+            constexpr float clusterDistance = 0.002f;
+            constexpr float clusterDistanceSquared = clusterDistance * clusterDistance;
+            for (size_t a = 0; a < vertexCount; ++a) {
+              for (size_t b = a + 1; b < vertexCount; ++b) {
+                const glm::vec3 delta =
+                  materialMesh.vertices[a].position - materialMesh.vertices[b].position;
+                if (glm::dot(delta, delta) <= clusterDistanceSquared) unite(a, b);
+              }
+            }
+
+            struct BulbBounds {
+              glm::vec3 min{std::numeric_limits<float>::max()};
+              glm::vec3 max{-std::numeric_limits<float>::max()};
+            };
+            std::map<size_t, BulbBounds> bulbs;
+            for (size_t vertex = 0; vertex < vertexCount; ++vertex) {
+              auto& bounds = bulbs[findRoot(vertex)];
+              bounds.min = glm::min(bounds.min, materialMesh.vertices[vertex].position);
+              bounds.max = glm::max(bounds.max, materialMesh.vertices[vertex].position);
+            }
+
+            const float colorMagnitude = glm::length(material->emissive);
+            const glm::vec3 bulbColor = colorMagnitude > 1e-6f
+              ? material->emissive / colorMagnitude
+              : glm::vec3(1.0f);
+            auto addBulbs = [&](const glm::mat4& transform,
+                                const MaterialMesh::InstanceMetadata& metadata) {
+              size_t bulbIndex = 0;
+              for (const auto& [_, bounds] : bulbs) {
+                ExtractedLight light;
+                light.type = ExtractedLight::Type::Point;
+                light.position = glm::vec3(
+                  transform * glm::vec4(0.5f * (bounds.min + bounds.max), 1.0f));
+                light.color = bulbColor;
+                light.intensity = 0.5f;
+                light.range = 0.75f;
+                light.group = LightGroup::StringLights;
+                light.sourceName = materialMesh.materialName + "_bulb_" + std::to_string(bulbIndex++);
+                light.sourceMaterial = material->GetName();
+                light.sourceNodeName = metadata.nodeName;
+                light.sourceNodePath = metadata.nodePath;
+                lights.push_back(std::move(light));
+              }
+            };
+
+            if (materialMesh.instances.empty()) {
+              addBulbs(glm::mat4(1.0f), MaterialMesh::InstanceMetadata{});
+            } else {
+              for (size_t instanceIndex = 0; instanceIndex < materialMesh.instances.size(); ++instanceIndex) {
+                const auto metadata = instanceIndex < materialMesh.instanceMetadata.size()
+                  ? materialMesh.instanceMetadata[instanceIndex]
+                  : MaterialMesh::InstanceMetadata{};
+                addBulbs(materialMesh.instances[instanceIndex].getModelMatrix(), metadata);
+              }
+            }
+            continue;
           }
 
           // Create emissive light(s) transformed by each instance's model matrix

@@ -109,7 +109,7 @@ inline constexpr size_t LIGHT_GROUP_COUNT = static_cast<size_t>(LightGroup::Coun
 inline const char* LightGroupToString(LightGroup group) {
   switch (group) {
     case LightGroup::SunSky:
-      return "Sun / Sky";
+      return "Sun (directional)";
     case LightGroup::StreetLamps:
       return "Street lamps";
     case LightGroup::StringLights:

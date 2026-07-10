@@ -1661,6 +1661,8 @@ class Renderer {
     float streetLampTemperatureKelvin = 2700.0f;
     float streetLampIntensity = 60.0f;
     float streetLampRange = 10.0f;
+    float stringLightIntensity = 0.5f;
+    float stringLightRange = 0.75f;
     float skyAmbientScale = 1.0f;
 
     // Dynamic lighting system using storage buffers

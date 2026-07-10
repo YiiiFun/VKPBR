@@ -41,6 +41,12 @@ bool IsBistroStreetLampProxy(const ExtractedLight& light) {
          light.sourceMaterial == "LMBR_000018b_bulb";
 }
 
+bool IsBistroStringLightProxy(const ExtractedLight& light) {
+  return light.type == ExtractedLight::Type::Point &&
+         light.group == LightGroup::StringLights &&
+         light.sourceMaterial.find("Paris_StringLights_01_") != std::string::npos;
+}
+
 glm::vec3 ColorTemperatureToRgb(float kelvin) {
   const float temperature = std::clamp(kelvin, 1000.0f, 40000.0f) / 100.0f;
   float red = 255.0f;
@@ -1130,6 +1136,9 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         controlledLight.color = ColorTemperatureToRgb(streetLampTemperatureKelvin);
         controlledLight.intensity = streetLampIntensity;
         controlledLight.range = streetLampRange;
+      } else if (IsBistroStringLightProxy(controlledLight)) {
+        controlledLight.intensity = stringLightIntensity;
+        controlledLight.range = stringLightRange;
       }
       controlledLight.intensity *= lightGroupIntensityScale[groupIndex];
       lightsSubset.push_back(controlledLight);
@@ -2282,11 +2291,15 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         ImGui::SameLine();
         if (ImGui::Button("Night preset")) {
           lightGroupEnabled.fill(false);
-          lightGroupEnabled[static_cast<size_t>(LightGroup::SunSky)] = true;
           lightGroupEnabled[static_cast<size_t>(LightGroup::StreetLamps)] = true;
+          lightGroupEnabled[static_cast<size_t>(LightGroup::StringLights)] = true;
           lightGroupIntensityScale.fill(1.0f);
-          lightGroupIntensityScale[static_cast<size_t>(LightGroup::SunSky)] = 0.02f;
           skyAmbientScale = 0.0f;
+          streetLampTemperatureKelvin = 2700.0f;
+          streetLampIntensity = 12.0f;
+          streetLampRange = 5.0f;
+          stringLightIntensity = 0.5f;
+          stringLightRange = 0.75f;
         }
         if (!rayQueryPresetAvailable) ImGui::EndDisabled();
         if (!rayQueryPresetAvailable) {
@@ -2322,6 +2335,21 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
               streetLampTemperatureKelvin = 2700.0f;
               streetLampIntensity = 60.0f;
               streetLampRange = 10.0f;
+              lightGroupIntensityScale[i] = 1.0f;
+            }
+            ImGui::Unindent();
+          } else if (group == LightGroup::StringLights) {
+            const size_t proxyCount = static_cast<size_t>(std::count_if(
+              staticLights.begin(), staticLights.end(), IsBistroStringLightProxy));
+            ImGui::Indent();
+            ImGui::SliderFloat("Per-bulb intensity", &stringLightIntensity,
+                               0.0f, 5.0f, "%.2f");
+            ImGui::SliderFloat("Per-bulb range (m)", &stringLightRange,
+                               0.1f, 2.0f, "%.2f m");
+            ImGui::Text("Detected bulb lights: %zu / 64", proxyCount);
+            if (ImGui::Button("Reset string lights")) {
+              stringLightIntensity = 0.5f;
+              stringLightRange = 0.75f;
               lightGroupIntensityScale[i] = 1.0f;
             }
             ImGui::Unindent();
