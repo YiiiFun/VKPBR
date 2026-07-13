@@ -44,6 +44,25 @@ bool ContainsAny(const std::string& text, std::initializer_list<const char*> nee
   return false;
 }
 
+glm::vec3 BistroStringLightFilteredColor(const std::string& materialName) {
+  glm::vec3 color(1.0f);
+  if (materialName.find("Yellow_Color") != std::string::npos) {
+    color = glm::vec3(9.4f, 10.0f, 0.04f);
+  } else if (materialName.find("Pink_Color") != std::string::npos) {
+    color = glm::vec3(12.4f, 1.5f, 12.8f);
+  } else if (materialName.find("Red_Color") != std::string::npos) {
+    color = glm::vec3(8.0f, 0.13f, 0.13f);
+  } else if (materialName.find("Green_Color") != std::string::npos) {
+    color = glm::vec3(0.0f, 11.4f, 0.52f);
+  } else if (materialName.find("Orange_Color") != std::string::npos) {
+    color = glm::vec3(20.0f, 0.8f, 0.0f);
+  } else if (materialName.find("Blue_Color") != std::string::npos) {
+    color = glm::vec3(0.0f, 4.0f, 9.0f);
+  }
+  const float magnitude = glm::length(color);
+  return magnitude > 1e-6f ? color / magnitude : glm::vec3(1.0f);
+}
+
 LightGroup ClassifyLightGroup(ExtractedLight::Type type,
                               const std::string& sourceName,
                               const std::string& sourceMaterial,
@@ -326,6 +345,13 @@ void ModelLoader::ProcessMaterials(const tinygltf::Model& gltfModel,
       material->emissiveStrength = 1.0f;
     } else if (material->GetName() == "LMBR_0000189_glass") {
       material->emissive = glm::vec3(8.0f);
+      material->emissiveStrength = 1.0f;
+    } else if (material->GetName().find("Paris_StringLights_01_") != std::string::npos) {
+      // Approximate a white-hot inner filament seen through a colored shell.
+      // The visible mesh receives a pale core while its generated point light
+      // below keeps the saturated filter color.
+      const glm::vec3 filteredColor = BistroStringLightFilteredColor(material->GetName());
+      material->emissive = glm::vec3(2.5f) + filteredColor * 1.5f;
       material->emissiveStrength = 1.0f;
     }
 
@@ -1862,10 +1888,7 @@ std::vector<ExtractedLight> ModelLoader::GetExtractedLights(const std::string& m
               bounds.max = glm::max(bounds.max, materialMesh.vertices[vertex].position);
             }
 
-            const float colorMagnitude = glm::length(material->emissive);
-            const glm::vec3 bulbColor = colorMagnitude > 1e-6f
-              ? material->emissive / colorMagnitude
-              : glm::vec3(1.0f);
+            const glm::vec3 bulbColor = BistroStringLightFilteredColor(material->GetName());
             auto addBulbs = [&](const glm::mat4& transform,
                                 const MaterialMesh::InstanceMetadata& metadata) {
               size_t bulbIndex = 0;

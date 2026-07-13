@@ -2294,10 +2294,10 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
           lightGroupEnabled[static_cast<size_t>(LightGroup::StreetLamps)] = true;
           lightGroupEnabled[static_cast<size_t>(LightGroup::StringLights)] = true;
           lightGroupIntensityScale.fill(1.0f);
-          skyAmbientScale = 0.0f;
+          skyAmbientScale = 1.0f;
           streetLampTemperatureKelvin = 2700.0f;
-          streetLampIntensity = 12.0f;
-          streetLampRange = 5.0f;
+          streetLampIntensity = 90.0f;
+          streetLampRange = 10.0f;
           stringLightIntensity = 0.5f;
           stringLightRange = 0.75f;
         }
@@ -2333,7 +2333,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
             ImGui::Text("Bulb lights: %zu / 28", proxyCount);
             if (ImGui::Button("Reset street lamps")) {
               streetLampTemperatureKelvin = 2700.0f;
-              streetLampIntensity = 60.0f;
+              streetLampIntensity = 90.0f;
               streetLampRange = 10.0f;
               lightGroupIntensityScale[i] = 1.0f;
             }

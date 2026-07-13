@@ -1659,7 +1659,7 @@ class Renderer {
     }();
     std::array<uint32_t, LIGHT_GROUP_COUNT> lastFrameLightGroupCounts{};
     float streetLampTemperatureKelvin = 2700.0f;
-    float streetLampIntensity = 60.0f;
+    float streetLampIntensity = 90.0f;
     float streetLampRange = 10.0f;
     float stringLightIntensity = 0.5f;
     float stringLightRange = 0.75f;
