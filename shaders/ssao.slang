@@ -108,5 +108,5 @@ void main(uint3 id : SV_DispatchThreadID)
 
     float rawAO = saturate(1.0 - occlusion / float(sampleCount));
     float ao = lerp(1.0, rawAO, intensity);
-    aoOut[id.xy] = max(ao, 0.45);
+    aoOut[id.xy] = ao;
 }
