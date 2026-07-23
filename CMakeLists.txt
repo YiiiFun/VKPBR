@@ -194,6 +194,7 @@ add_executable(SimpleEngine ${SOURCES})
 add_dependencies(SimpleEngine shaders)
 set_target_properties(SimpleEngine PROPERTIES
     CXX_STANDARD 20
+    CXX_SCAN_FOR_MODULES OFF
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 

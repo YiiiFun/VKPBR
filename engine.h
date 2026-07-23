@@ -264,6 +264,7 @@ class Engine
 		float     panSensitivity          = 0.005f;
 		float     scrollStep              = 0.75f;
 		float     uiFontScale             = 1.3f;
+		bool      cameraFixed             = false;
 		bool      collisionEnabled        = false;
 		float     collisionRadius         = 0.5f;
 		bool      lastCollisionBlocked    = false;

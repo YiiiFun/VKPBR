@@ -40,12 +40,18 @@ struct VSOut {
 
 // Set 0, binding 0: combined image sampler for the off-screen scene color
 [[vk::binding(0, 0)]] Sampler2D sceneColor;
+// Set 0, binding 1: screen-space ambient occlusion factor.
+[[vk::binding(1, 0)]] Sampler2D ssaoTexture;
 
 struct Push {
     float exposure;
     float gamma;
     int   outputIsSRGB; // 1 when the color attachment is SRGB; 0 otherwise
-    float _pad;         // pad to 16 bytes for push constant layout
+    int   ssaoEnabled;
+    int   ssaoDebugView;
+    float ssaoCompositeStrength;
+    float _pad0;
+    float _pad1;
 };
 [[vk::push_constant]] Push pushConsts;
 
@@ -54,6 +60,14 @@ struct Push {
 {
     float4 c = sceneColor.Sample(i.UV);
     float3 color = c.rgb;
+    float ao = saturate(ssaoTexture.Sample(i.UV).r);
+
+    if (pushConsts.ssaoDebugView != 0) {
+        color = float3(ao, ao, ao);
+    } else if (pushConsts.ssaoEnabled != 0) {
+        float aoMix = lerp(1.0, ao, saturate(pushConsts.ssaoCompositeStrength));
+        color *= aoMix;
+    }
 
     // Apply exposure and filmic tonemapping
     color *= pushConsts.exposure;

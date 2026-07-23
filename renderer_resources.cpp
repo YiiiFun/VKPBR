@@ -54,7 +54,7 @@ bool Renderer::createDepthResources() {
       swapChainExtent.height,
       depthFormat,
       vk::ImageTiling::eOptimal,
-      vk::ImageUsageFlagBits::eDepthStencilAttachment,
+      vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled,
       vk::MemoryPropertyFlagBits::eDeviceLocal);
 
     // Create depth image view
@@ -1311,8 +1311,8 @@ bool Renderer::createDescriptorPool() {
     // Acceleration structure descriptors: Ray query needs 1 TLAS descriptor per frame
     const uint32_t accelerationStructureDescriptors = MAX_FRAMES_IN_FLIGHT;
 
-    // Storage image descriptors: Ray query needs 1 output image descriptor per frame
-    const uint32_t storageImageDescriptors = MAX_FRAMES_IN_FLIGHT;
+    // Storage image descriptors: Ray query output plus SSAO raw/blur outputs per frame.
+    const uint32_t storageImageDescriptors = MAX_FRAMES_IN_FLIGHT * 3u;
 
     // Reserve extra combined image sampler capacity for Ray Query binding 6 (baseColor texture array)
     const uint32_t rqTexDescriptors = MAX_FRAMES_IN_FLIGHT * RQ_MAX_TEX;
@@ -2323,6 +2323,224 @@ bool Renderer::createOpaqueSceneColorResources() {
   } catch (const std::exception& e) {
     std::cerr << "Failed to create opaque scene color resources: " << e.what() << std::endl;
     return false;
+  }
+}
+
+void Renderer::destroySSAOResources() {
+  ssaoDescriptorSets.clear();
+  ssaoBlurDescriptorSets.clear();
+  ssaoRawImageViews.clear();
+  ssaoRawImages.clear();
+  ssaoRawImageAllocations.clear();
+  ssaoRawImageLayouts.clear();
+  ssaoBlurImageViews.clear();
+  ssaoBlurImages.clear();
+  ssaoBlurImageAllocations.clear();
+  ssaoBlurImageLayouts.clear();
+  ssaoUniformBuffers.clear();
+  ssaoUniformAllocations.clear();
+  ssaoUniformBuffersMapped.clear();
+  ssaoSampler = vk::raii::Sampler(nullptr);
+}
+
+bool Renderer::createSSAOResources() {
+  try {
+    destroySSAOResources();
+
+    ssaoFormat = vk::Format::eR16Sfloat;
+    auto props = physicalDevice.getFormatProperties(ssaoFormat);
+    if (!(props.optimalTilingFeatures & vk::FormatFeatureFlagBits::eStorageImage)) {
+      ssaoFormat = vk::Format::eR32Sfloat;
+    }
+
+    ssaoRawImages.reserve(MAX_FRAMES_IN_FLIGHT);
+    ssaoRawImageAllocations.reserve(MAX_FRAMES_IN_FLIGHT);
+    ssaoRawImageViews.reserve(MAX_FRAMES_IN_FLIGHT);
+    ssaoRawImageLayouts.reserve(MAX_FRAMES_IN_FLIGHT);
+    ssaoBlurImages.reserve(MAX_FRAMES_IN_FLIGHT);
+    ssaoBlurImageAllocations.reserve(MAX_FRAMES_IN_FLIGHT);
+    ssaoBlurImageViews.reserve(MAX_FRAMES_IN_FLIGHT);
+    ssaoBlurImageLayouts.reserve(MAX_FRAMES_IN_FLIGHT);
+
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+      auto [rawImage, rawAlloc] = createImagePooled(
+        swapChainExtent.width,
+        swapChainExtent.height,
+        ssaoFormat,
+        vk::ImageTiling::eOptimal,
+        vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc,
+        vk::MemoryPropertyFlagBits::eDeviceLocal);
+      ssaoRawImages.push_back(std::move(rawImage));
+      ssaoRawImageAllocations.push_back(std::move(rawAlloc));
+      ssaoRawImageViews.push_back(createImageView(ssaoRawImages.back(), ssaoFormat, vk::ImageAspectFlagBits::eColor));
+      ssaoRawImageLayouts.push_back(vk::ImageLayout::eUndefined);
+
+      auto [blurImage, blurAlloc] = createImagePooled(
+        swapChainExtent.width,
+        swapChainExtent.height,
+        ssaoFormat,
+        vk::ImageTiling::eOptimal,
+        vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc,
+        vk::MemoryPropertyFlagBits::eDeviceLocal);
+      ssaoBlurImages.push_back(std::move(blurImage));
+      ssaoBlurImageAllocations.push_back(std::move(blurAlloc));
+      ssaoBlurImageViews.push_back(createImageView(ssaoBlurImages.back(), ssaoFormat, vk::ImageAspectFlagBits::eColor));
+      ssaoBlurImageLayouts.push_back(vk::ImageLayout::eUndefined);
+    }
+
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+      transitionImageLayout(*ssaoRawImages[i], ssaoFormat, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal);
+      ssaoRawImageLayouts[i] = vk::ImageLayout::eShaderReadOnlyOptimal;
+      transitionImageLayout(*ssaoBlurImages[i], ssaoFormat, vk::ImageLayout::eUndefined, vk::ImageLayout::eShaderReadOnlyOptimal);
+      ssaoBlurImageLayouts[i] = vk::ImageLayout::eShaderReadOnlyOptimal;
+    }
+
+    vk::SamplerCreateInfo samplerInfo{
+      .magFilter = vk::Filter::eLinear,
+      .minFilter = vk::Filter::eLinear,
+      .mipmapMode = vk::SamplerMipmapMode::eNearest,
+      .addressModeU = vk::SamplerAddressMode::eClampToEdge,
+      .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+      .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+      .minLod = 0.0f,
+      .maxLod = 0.0f
+    };
+    ssaoSampler = vk::raii::Sampler(device, samplerInfo);
+
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+      auto [ubo, alloc] = createBufferPooled(
+        sizeof(SSAOUniformBufferObject),
+        vk::BufferUsageFlagBits::eUniformBuffer,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+      ssaoUniformBuffers.push_back(std::move(ubo));
+      ssaoUniformAllocations.push_back(std::move(alloc));
+      ssaoUniformBuffersMapped.push_back(ssaoUniformAllocations.back()->mappedPtr);
+    }
+
+    createSSAODescriptorSets();
+    return true;
+  } catch (const std::exception& e) {
+    std::cerr << "Failed to create SSAO resources: " << e.what() << std::endl;
+    destroySSAOResources();
+    return false;
+  }
+}
+
+void Renderer::createSSAODescriptorSets() {
+  if (!*descriptorPool || !*ssaoDescriptorSetLayout || !*ssaoBlurDescriptorSetLayout || !*ssaoSampler)
+    return;
+  if (ssaoRawImageViews.size() < MAX_FRAMES_IN_FLIGHT || ssaoBlurImageViews.size() < MAX_FRAMES_IN_FLIGHT)
+    return;
+  if (ssaoUniformBuffers.size() < MAX_FRAMES_IN_FLIGHT || !*depthImageView)
+    return;
+
+  std::vector<vk::DescriptorSetLayout> ssaoLayouts(MAX_FRAMES_IN_FLIGHT, *ssaoDescriptorSetLayout);
+  vk::DescriptorSetAllocateInfo ssaoAlloc{
+    .descriptorPool = *descriptorPool,
+    .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
+    .pSetLayouts = ssaoLayouts.data()
+  };
+  {
+    std::lock_guard<std::mutex> lk(descriptorMutex);
+    ssaoDescriptorSets = vk::raii::DescriptorSets(device, ssaoAlloc);
+  }
+
+  std::vector<vk::DescriptorSetLayout> blurLayouts(MAX_FRAMES_IN_FLIGHT, *ssaoBlurDescriptorSetLayout);
+  vk::DescriptorSetAllocateInfo blurAlloc{
+    .descriptorPool = *descriptorPool,
+    .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
+    .pSetLayouts = blurLayouts.data()
+  };
+  {
+    std::lock_guard<std::mutex> lk(descriptorMutex);
+    ssaoBlurDescriptorSets = vk::raii::DescriptorSets(device, blurAlloc);
+  }
+
+  for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+    vk::DescriptorImageInfo depthInfo{
+      .sampler = *ssaoSampler,
+      .imageView = *depthImageView,
+      .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal
+    };
+    vk::DescriptorImageInfo rawStorageInfo{
+      .sampler = nullptr,
+      .imageView = *ssaoRawImageViews[i],
+      .imageLayout = vk::ImageLayout::eGeneral
+    };
+    vk::DescriptorBufferInfo uboInfo{
+      .buffer = *ssaoUniformBuffers[i],
+      .offset = 0,
+      .range = sizeof(SSAOUniformBufferObject)
+    };
+
+    std::array<vk::WriteDescriptorSet, 3> ssaoWrites = {
+      vk::WriteDescriptorSet{.dstSet = *ssaoDescriptorSets[i], .dstBinding = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &depthInfo},
+      vk::WriteDescriptorSet{.dstSet = *ssaoDescriptorSets[i], .dstBinding = 1, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &rawStorageInfo},
+      vk::WriteDescriptorSet{.dstSet = *ssaoDescriptorSets[i], .dstBinding = 2, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eUniformBuffer, .pBufferInfo = &uboInfo}
+    };
+    {
+      std::lock_guard<std::mutex> lk(descriptorMutex);
+      device.updateDescriptorSets(ssaoWrites, {});
+    }
+
+    vk::DescriptorImageInfo rawSampleInfo{
+      .sampler = *ssaoSampler,
+      .imageView = *ssaoRawImageViews[i],
+      .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
+    };
+    vk::DescriptorImageInfo blurStorageInfo{
+      .sampler = nullptr,
+      .imageView = *ssaoBlurImageViews[i],
+      .imageLayout = vk::ImageLayout::eGeneral
+    };
+    std::array<vk::WriteDescriptorSet, 3> blurWrites = {
+      vk::WriteDescriptorSet{.dstSet = *ssaoBlurDescriptorSets[i], .dstBinding = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &rawSampleInfo},
+      vk::WriteDescriptorSet{.dstSet = *ssaoBlurDescriptorSets[i], .dstBinding = 1, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &blurStorageInfo},
+      vk::WriteDescriptorSet{.dstSet = *ssaoBlurDescriptorSets[i], .dstBinding = 2, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eUniformBuffer, .pBufferInfo = &uboInfo}
+    };
+    {
+      std::lock_guard<std::mutex> lk(descriptorMutex);
+      device.updateDescriptorSets(blurWrites, {});
+    }
+  }
+}
+
+void Renderer::createCompositeDescriptorSets() {
+  if (!*descriptorPool || !*compositeDescriptorSetLayout || !*opaqueSceneColorSampler)
+    return;
+  if (opaqueSceneColorImageViews.size() < MAX_FRAMES_IN_FLIGHT || ssaoBlurImageViews.size() < MAX_FRAMES_IN_FLIGHT)
+    return;
+
+  std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *compositeDescriptorSetLayout);
+  vk::DescriptorSetAllocateInfo allocInfo{
+    .descriptorPool = *descriptorPool,
+    .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
+    .pSetLayouts = layouts.data()
+  };
+  {
+    std::lock_guard<std::mutex> lk(descriptorMutex);
+    compositeDescriptorSets = vk::raii::DescriptorSets(device, allocInfo);
+  }
+
+  for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+    vk::DescriptorImageInfo sceneInfo{
+      .sampler = *opaqueSceneColorSampler,
+      .imageView = *opaqueSceneColorImageViews[i],
+      .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
+    };
+    vk::DescriptorImageInfo aoInfo{
+      .sampler = *ssaoSampler,
+      .imageView = *ssaoBlurImageViews[i],
+      .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
+    };
+    std::array<vk::WriteDescriptorSet, 2> writes = {
+      vk::WriteDescriptorSet{.dstSet = *compositeDescriptorSets[i], .dstBinding = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &sceneInfo},
+      vk::WriteDescriptorSet{.dstSet = *compositeDescriptorSets[i], .dstBinding = 1, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &aoInfo}
+    };
+    {
+      std::lock_guard<std::mutex> lk(descriptorMutex);
+      device.updateDescriptorSets(writes, {});
+    }
   }
 }
 

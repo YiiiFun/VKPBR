@@ -256,6 +256,13 @@ bool Renderer::Initialize(const std::string& appName, bool enableValidationLayer
   }
   LOGI("Composite pipeline created successfully");
 
+  LOGI("Creating SSAO pipelines...");
+  if (!createSSAOPipelines()) {
+    LOGE("Failed to create SSAO pipelines");
+    return false;
+  }
+  LOGI("SSAO pipelines created successfully");
+
   // Create shared resources for rendering compute passes.
   LOGI("Creating compute resources...");
   if (!createComputeResources()) {
@@ -331,6 +338,13 @@ bool Renderer::Initialize(const std::string& appName, bool enableValidationLayer
   }
   LOGI("Descriptor pool created successfully");
 
+  LOGI("Creating SSAO resources...");
+  if (!createSSAOResources()) {
+    LOGE("Failed to create SSAO resources");
+    return false;
+  }
+  LOGI("SSAO resources created successfully");
+
   // Create ray query resources AFTER descriptor pool (needs pool for descriptor set allocation)
   LOGI("Creating ray query resources...");
   if (!createRayQueryResources()) {
@@ -354,6 +368,10 @@ bool Renderer::Initialize(const std::string& appName, bool enableValidationLayer
   LOGI("Creating transparent descriptor sets...");
   createTransparentDescriptorSets();
   LOGI("Transparent descriptor sets created");
+
+  LOGI("Creating composite descriptor sets...");
+  createCompositeDescriptorSets();
+  LOGI("Composite descriptor sets created");
 
   // Create default texture resources
   LOGI("Creating default texture resources...");

@@ -389,6 +389,19 @@ void Engine::handleMouseInput(float x, float y, uint32_t buttons) {
     imguiSystem->HandleMouse(x, y, buttons);
   }
 
+  if (cameraControl.cameraFixed) {
+    cameraControl.mouseLeftPressed = false;
+    cameraControl.mouseRightPressed = false;
+    cameraControl.firstMouse = true;
+    cameraControl.firstRightMouse = true;
+    cameraControl.pendingXOffset = 0.0f;
+    cameraControl.pendingYOffset = 0.0f;
+    cameraControl.pendingPanX = 0.0f;
+    cameraControl.pendingPanY = 0.0f;
+    HandleMouseHover(x, y);
+    return;
+  }
+
   // Handle LEFT button (Touch DOWN/MOVE/UP)
   if (buttons & 1) {
     if (!cameraControl.mouseLeftPressed) {
@@ -446,6 +459,10 @@ void Engine::handleScrollInput(float yOffset) {
   if (imguiSystem) {
     imguiSystem->HandleScroll(yOffset);
   }
+  if (cameraControl.cameraFixed) {
+    cameraControl.pendingScrollDelta = 0.0f;
+    return;
+  }
   cameraControl.pendingScrollDelta += yOffset;
 }
 
@@ -461,29 +478,29 @@ void Engine::handleKeyInput(uint32_t key, bool pressed) {
   switch (key) {
     case GLFW_KEY_W:
     case GLFW_KEY_UP:
-      cameraControl.moveForward = pressed;
+      cameraControl.moveForward = cameraControl.cameraFixed ? false : pressed;
       break;
     case GLFW_KEY_S:
     case GLFW_KEY_DOWN:
-      cameraControl.moveBackward = pressed;
+      cameraControl.moveBackward = cameraControl.cameraFixed ? false : pressed;
       break;
     case GLFW_KEY_A:
     case GLFW_KEY_LEFT:
-      cameraControl.moveLeft = pressed;
+      cameraControl.moveLeft = cameraControl.cameraFixed ? false : pressed;
       break;
     case GLFW_KEY_D:
     case GLFW_KEY_RIGHT:
-      cameraControl.moveRight = pressed;
+      cameraControl.moveRight = cameraControl.cameraFixed ? false : pressed;
       break;
     case GLFW_KEY_Q:
     case GLFW_KEY_PAGE_UP:
     case GLFW_KEY_SPACE:
-      cameraControl.moveUp = pressed;
+      cameraControl.moveUp = cameraControl.cameraFixed ? false : pressed;
       break;
     case GLFW_KEY_E:
     case GLFW_KEY_PAGE_DOWN:
     case GLFW_KEY_LEFT_SHIFT:
-      cameraControl.moveDown = pressed;
+      cameraControl.moveDown = cameraControl.cameraFixed ? false : pressed;
       break;
     default:
       break;
@@ -632,6 +649,25 @@ void Engine::UpdateCameraControls(TimeDelta deltaTime) {
   auto* cameraTransform = activeCamera->GetOwner()->GetComponent<TransformComponent>();
   if (!cameraTransform)
     return;
+
+  if (cameraControl.cameraFixed) {
+    cameraControl.moveForward = false;
+    cameraControl.moveBackward = false;
+    cameraControl.moveLeft = false;
+    cameraControl.moveRight = false;
+    cameraControl.moveUp = false;
+    cameraControl.moveDown = false;
+    cameraControl.pendingXOffset = 0.0f;
+    cameraControl.pendingYOffset = 0.0f;
+    cameraControl.pendingPanX = 0.0f;
+    cameraControl.pendingPanY = 0.0f;
+    cameraControl.pendingScrollDelta = 0.0f;
+    cameraControl.mouseLeftPressed = false;
+    cameraControl.mouseRightPressed = false;
+    cameraControl.firstMouse = true;
+    cameraControl.firstRightMouse = true;
+    return;
+  }
 
   // Calculate movement speed
   float velocity = cameraControl.cameraSpeed * deltaTime.count() * .001f;
@@ -823,6 +859,22 @@ void Engine::DrawCameraControlPanel() {
     ImGui::GetIO().FontGlobalScale = cameraControl.uiFontScale;
   }
 
+  ImGui::Separator();
+  if (ImGui::Checkbox("Fixed Camera", &cameraControl.cameraFixed) && cameraControl.cameraFixed) {
+    cameraControl.moveForward = false;
+    cameraControl.moveBackward = false;
+    cameraControl.moveLeft = false;
+    cameraControl.moveRight = false;
+    cameraControl.moveUp = false;
+    cameraControl.moveDown = false;
+    cameraControl.pendingXOffset = 0.0f;
+    cameraControl.pendingYOffset = 0.0f;
+    cameraControl.pendingPanX = 0.0f;
+    cameraControl.pendingPanY = 0.0f;
+    cameraControl.pendingScrollDelta = 0.0f;
+    cameraControl.mouseLeftPressed = false;
+    cameraControl.mouseRightPressed = false;
+  }
   ImGui::Separator();
   ImGui::Checkbox("Enable Camera Collision", &cameraControl.collisionEnabled);
   ImGui::BeginDisabled(!cameraControl.collisionEnabled);

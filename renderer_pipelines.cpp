@@ -750,12 +750,28 @@ bool Renderer::createPBRPipeline() {
 // Create fullscreen composite pipeline (samples off-screen color and writes to swapchain)
 bool Renderer::createCompositePipeline() {
   try {
-    // Reuse the transparent descriptor set layout (binding 0 = combined image sampler)
-    if (*transparentDescriptorSetLayout == nullptr) {
-      // Ensure PBR pipeline path created it
-      if (!createPBRPipeline()) {
-        return false;
-      }
+    if (*compositeDescriptorSetLayout == nullptr) {
+      std::array<vk::DescriptorSetLayoutBinding, 2> bindings = {
+        vk::DescriptorSetLayoutBinding{
+          .binding = 0,
+          .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+          .descriptorCount = 1,
+          .stageFlags = vk::ShaderStageFlagBits::eFragment,
+          .pImmutableSamplers = nullptr
+        },
+        vk::DescriptorSetLayoutBinding{
+          .binding = 1,
+          .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+          .descriptorCount = 1,
+          .stageFlags = vk::ShaderStageFlagBits::eFragment,
+          .pImmutableSamplers = nullptr
+        }
+      };
+      vk::DescriptorSetLayoutCreateInfo layoutInfo{
+        .bindingCount = static_cast<uint32_t>(bindings.size()),
+        .pBindings = bindings.data()
+      };
+      compositeDescriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
     }
 
     // Read composite shader code
@@ -795,9 +811,9 @@ bool Renderer::createCompositePipeline() {
     std::array dynStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
     vk::PipelineDynamicStateCreateInfo dynamicState{.dynamicStateCount = static_cast<uint32_t>(dynStates.size()), .pDynamicStates = dynStates.data()};
 
-    // Pipeline layout: single set (combined image sampler) + push constants for exposure/gamma/srgb flag
-    vk::DescriptorSetLayout setLayouts[] = {*transparentDescriptorSetLayout};
-    vk::PushConstantRange pushRange{.stageFlags = vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = 16}; // matches struct Push in composite.slang
+    // Pipeline layout: scene color + AO texture, plus tone mapping / AO push constants.
+    vk::DescriptorSetLayout setLayouts[] = {*compositeDescriptorSetLayout};
+    vk::PushConstantRange pushRange{.stageFlags = vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = 32}; // matches struct Push in composite.slang
     vk::PipelineLayoutCreateInfo plInfo{.setLayoutCount = 1, .pSetLayouts = setLayouts, .pushConstantRangeCount = 1, .pPushConstantRanges = &pushRange};
     compositePipelineLayout = vk::raii::PipelineLayout(device, plInfo);
 
@@ -828,6 +844,105 @@ bool Renderer::createCompositePipeline() {
     return true;
   } catch (const std::exception& e) {
     std::cerr << "Failed to create composite pipeline: " << e.what() << std::endl;
+    return false;
+  }
+}
+
+bool Renderer::createSSAOPipelines() {
+  try {
+    std::array<vk::DescriptorSetLayoutBinding, 3> ssaoBindings = {
+      vk::DescriptorSetLayoutBinding{
+        .binding = 0,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eCompute,
+        .pImmutableSamplers = nullptr
+      },
+      vk::DescriptorSetLayoutBinding{
+        .binding = 1,
+        .descriptorType = vk::DescriptorType::eStorageImage,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eCompute,
+        .pImmutableSamplers = nullptr
+      },
+      vk::DescriptorSetLayoutBinding{
+        .binding = 2,
+        .descriptorType = vk::DescriptorType::eUniformBuffer,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eCompute,
+        .pImmutableSamplers = nullptr
+      }
+    };
+    vk::DescriptorSetLayoutCreateInfo ssaoLayoutInfo{
+      .bindingCount = static_cast<uint32_t>(ssaoBindings.size()),
+      .pBindings = ssaoBindings.data()
+    };
+    ssaoDescriptorSetLayout = vk::raii::DescriptorSetLayout(device, ssaoLayoutInfo);
+
+    std::array<vk::DescriptorSetLayoutBinding, 3> blurBindings = {
+      vk::DescriptorSetLayoutBinding{
+        .binding = 0,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eCompute,
+        .pImmutableSamplers = nullptr
+      },
+      vk::DescriptorSetLayoutBinding{
+        .binding = 1,
+        .descriptorType = vk::DescriptorType::eStorageImage,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eCompute,
+        .pImmutableSamplers = nullptr
+      },
+      vk::DescriptorSetLayoutBinding{
+        .binding = 2,
+        .descriptorType = vk::DescriptorType::eUniformBuffer,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eCompute,
+        .pImmutableSamplers = nullptr
+      }
+    };
+    vk::DescriptorSetLayoutCreateInfo blurLayoutInfo{
+      .bindingCount = static_cast<uint32_t>(blurBindings.size()),
+      .pBindings = blurBindings.data()
+    };
+    ssaoBlurDescriptorSetLayout = vk::raii::DescriptorSetLayout(device, blurLayoutInfo);
+
+    auto ssaoCode = readFile("shaders/ssao.spv");
+    auto ssaoBlurCode = readFile("shaders/ssao_blur.spv");
+    vk::raii::ShaderModule ssaoModule = createShaderModule(ssaoCode);
+    vk::raii::ShaderModule ssaoBlurModule = createShaderModule(ssaoBlurCode);
+
+    vk::PipelineLayoutCreateInfo ssaoPLInfo{
+      .setLayoutCount = 1,
+      .pSetLayouts = &*ssaoDescriptorSetLayout
+    };
+    ssaoPipelineLayout = vk::raii::PipelineLayout(device, ssaoPLInfo);
+
+    vk::PipelineShaderStageCreateInfo ssaoStage{
+      .stage = vk::ShaderStageFlagBits::eCompute,
+      .module = *ssaoModule,
+      .pName = "main"
+    };
+    vk::ComputePipelineCreateInfo ssaoInfo{.stage = ssaoStage, .layout = *ssaoPipelineLayout};
+    ssaoPipeline = vk::raii::Pipeline(device, nullptr, ssaoInfo);
+
+    vk::PipelineLayoutCreateInfo blurPLInfo{
+      .setLayoutCount = 1,
+      .pSetLayouts = &*ssaoBlurDescriptorSetLayout
+    };
+    ssaoBlurPipelineLayout = vk::raii::PipelineLayout(device, blurPLInfo);
+
+    vk::PipelineShaderStageCreateInfo blurStage{
+      .stage = vk::ShaderStageFlagBits::eCompute,
+      .module = *ssaoBlurModule,
+      .pName = "main"
+    };
+    vk::ComputePipelineCreateInfo blurInfo{.stage = blurStage, .layout = *ssaoBlurPipelineLayout};
+    ssaoBlurPipeline = vk::raii::Pipeline(device, nullptr, blurInfo);
+    return true;
+  } catch (const std::exception& e) {
+    std::cerr << "Failed to create SSAO pipelines: " << e.what() << std::endl;
     return false;
   }
 }
@@ -1317,13 +1432,8 @@ bool Renderer::createRayQueryResources() {
       }
     }
 
-    // Create descriptor sets for composite pass to sample the rayQueryOutputImage
-    // Reuse the transparentDescriptorSetLayout (binding 0 = combined image sampler)
-    if (*transparentDescriptorSetLayout == nullptr) {
-      // Ensure it exists (created by PBR path);
-      createPBRPipeline();
-    }
-    if (*transparentDescriptorSetLayout != nullptr) {
+    // Create descriptor sets for composite pass to sample the rayQueryOutputImage and AO texture.
+    if (*compositeDescriptorSetLayout != nullptr && *ssaoSampler != nullptr && !ssaoBlurImageViews.empty()) {
       // Ensure we have a valid sampler for sampling the ray-query output image
       if (*rqCompositeSampler == nullptr) {
         vk::SamplerCreateInfo sci{
@@ -1345,7 +1455,7 @@ bool Renderer::createRayQueryResources() {
         };
         rqCompositeSampler = vk::raii::Sampler(device, sci);
       }
-      std::vector<vk::DescriptorSetLayout> rqLayouts(MAX_FRAMES_IN_FLIGHT, *transparentDescriptorSetLayout);
+      std::vector<vk::DescriptorSetLayout> rqLayouts(MAX_FRAMES_IN_FLIGHT, *compositeDescriptorSetLayout);
       vk::DescriptorSetAllocateInfo rqAllocInfo{
         .descriptorPool = *descriptorPool,
         .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
@@ -1359,24 +1469,39 @@ bool Renderer::createRayQueryResources() {
         }
       }
 
-      // Update each set to sample the rayQueryOutputImage
+      // Update each set to sample the rayQueryOutputImage plus the current frame AO output.
       for (size_t i = 0; i < rqCompositeDescriptorSets.size(); ++i) {
         // Use a dedicated sampler to avoid null sampler issues during early init
         vk::Sampler samplerHandle = *rqCompositeSampler;
-        vk::DescriptorImageInfo imgInfo{
+        vk::DescriptorImageInfo sceneInfo{
           .sampler = samplerHandle,
           .imageView = *rayQueryOutputImageView,
           .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
         };
-        vk::WriteDescriptorSet write{
-          .dstSet = *rqCompositeDescriptorSets[i],
-          .dstBinding = 0,
-          .dstArrayElement = 0,
-          .descriptorCount = 1,
-          .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-          .pImageInfo = &imgInfo
+        vk::DescriptorImageInfo aoInfo{
+          .sampler = *ssaoSampler,
+          .imageView = *ssaoBlurImageViews[i],
+          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
         };
-        device.updateDescriptorSets({write}, {});
+        std::array<vk::WriteDescriptorSet, 2> writes = {
+          vk::WriteDescriptorSet{
+            .dstSet = *rqCompositeDescriptorSets[i],
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .pImageInfo = &sceneInfo
+          },
+          vk::WriteDescriptorSet{
+            .dstSet = *rqCompositeDescriptorSets[i],
+            .dstBinding = 1,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .pImageInfo = &aoInfo
+          }
+        };
+        device.updateDescriptorSets(writes, {});
       }
     }
 
