@@ -2396,17 +2396,49 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       }
       ImGui::SliderFloat("LOD threshold opaque (px)", &lodPixelThresholdOpaque, 0.5f, 8.0f, "%.1f");
       ImGui::SliderFloat("LOD threshold transparent (px)", &lodPixelThresholdTransparent, 0.5f, 12.0f, "%.1f");
-      // Anisotropy control (recreate samplers on change)
+
+      ImGui::Separator();
+      ImGui::Text("Texture Sampling:");
       {
         float deviceMaxAniso = physicalDevice.getProperties().limits.maxSamplerAnisotropy;
-        if (ImGui::SliderFloat("Sampler max anisotropy", &samplerMaxAnisotropy, 1.0f, deviceMaxAniso, "%.1f")) {
-          // Recreate samplers for all textures to apply new anisotropy
-          std::unique_lock<std::shared_mutex> texLock(textureResourcesMutex);
-          for (auto& kv : textureResources) {
-            createTextureSampler(kv.second);
+        bool refreshSamplers = false;
+        if (ImGui::Checkbox("Mipmap sampling", &textureMipmapsEnabled)) {
+          refreshSamplers = true;
+        }
+
+        const float lodBiasBefore = textureMipLodBias;
+        ImGui::SliderFloat("Mipmap LOD bias", &textureMipLodBias, -2.0f, 4.0f, "%.2f");
+        textureMipLodBias = std::clamp(textureMipLodBias, -2.0f, 4.0f);
+        if (std::abs(textureMipLodBias - lodBiasBefore) > 1e-4f && ImGui::IsItemDeactivatedAfterEdit()) {
+          refreshSamplers = true;
+        }
+
+        const float anisoBefore = samplerMaxAnisotropy;
+        ImGui::SliderFloat("Sampler max anisotropy", &samplerMaxAnisotropy, 1.0f, deviceMaxAniso, "%.1f");
+        samplerMaxAnisotropy = std::clamp(samplerMaxAnisotropy, 1.0f, deviceMaxAniso);
+        if (std::abs(samplerMaxAnisotropy - anisoBefore) > 1e-3f && ImGui::IsItemDeactivatedAfterEdit()) {
+          refreshSamplers = true;
+        }
+
+        uint32_t textureCount = 0;
+        uint32_t mippedTextureCount = 0;
+        uint32_t maxMipLevelsSeen = 1;
+        {
+          std::shared_lock<std::shared_mutex> texLock(textureResourcesMutex);
+          textureCount = static_cast<uint32_t>(textureResources.size());
+          for (const auto& kv : textureResources) {
+            const uint32_t mipLevels = kv.second.mipLevels;
+            if (mipLevels > 1) {
+              ++mippedTextureCount;
+              maxMipLevelsSeen = std::max(maxMipLevelsSeen, mipLevels);
+            }
           }
-          // Default texture
-          createTextureSampler(defaultTextureResources);
+        }
+        ImGui::Text("Mipped textures: %u / %u  max levels: %u", mippedTextureCount, textureCount, maxMipLevelsSeen);
+        ImGui::TextDisabled("Positive LOD bias blurs distant textures earlier; negative bias keeps them sharper.");
+
+        if (refreshSamplers) {
+          refreshTextureSamplers(entities);
         }
       }
       if (lastCullingVisibleCount + lastCullingCulledCount > 0) {

@@ -705,15 +705,16 @@ bool Renderer::createTextureSampler(TextureResources& resources) {
     // Create sampler with mipmapping + anisotropy (clamped to device limit)
     float deviceMaxAniso = properties.limits.maxSamplerAnisotropy;
     float desiredAniso = std::clamp(samplerMaxAnisotropy, 1.0f, deviceMaxAniso);
-    float maxLod = resources.mipLevels > 1 ? static_cast<float>(resources.mipLevels - 1) : 0.0f;
+    const bool useMipmaps = textureMipmapsEnabled && resources.mipLevels > 1;
+    float maxLod = useMipmaps ? static_cast<float>(resources.mipLevels - 1) : 0.0f;
     vk::SamplerCreateInfo samplerInfo{
       .magFilter = vk::Filter::eLinear,
       .minFilter = vk::Filter::eLinear,
-      .mipmapMode = vk::SamplerMipmapMode::eLinear,
+      .mipmapMode = useMipmaps ? vk::SamplerMipmapMode::eLinear : vk::SamplerMipmapMode::eNearest,
       .addressModeU = vk::SamplerAddressMode::eRepeat,
       .addressModeV = vk::SamplerAddressMode::eRepeat,
       .addressModeW = vk::SamplerAddressMode::eRepeat,
-      .mipLodBias = 0.0f,
+      .mipLodBias = useMipmaps ? std::clamp(textureMipLodBias, -2.0f, 4.0f) : 0.0f,
       .anisotropyEnable = desiredAniso > 1.0f ? VK_TRUE : VK_FALSE,
       .maxAnisotropy = desiredAniso,
       .compareEnable = VK_FALSE,
@@ -729,6 +730,33 @@ bool Renderer::createTextureSampler(TextureResources& resources) {
   } catch (const std::exception& e) {
     std::cerr << "Failed to create texture sampler: " << e.what() << std::endl;
     return false;
+  }
+}
+
+void Renderer::refreshTextureSamplers(const std::vector<Entity *>& entities) {
+  WaitIdle();
+
+  {
+    std::unique_lock<std::shared_mutex> texLock(textureResourcesMutex);
+    for (auto& kv : textureResources) {
+      createTextureSampler(kv.second);
+    }
+    createTextureSampler(defaultTextureResources);
+  }
+
+  for (Entity* entity : entities) {
+    MarkEntityDescriptorsDirty(entity);
+  }
+  for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex) {
+    ProcessDirtyDescriptorsForFrame(frameIndex);
+  }
+
+  if (rayQueryEnabled && accelerationStructureEnabled) {
+    const uint32_t allFramesMask = (MAX_FRAMES_IN_FLIGHT >= 32u) ? 0xFFFFFFFFu : ((1u << MAX_FRAMES_IN_FLIGHT) - 1u);
+    rayQueryDescriptorsDirtyMask.fetch_or(allFramesMask, std::memory_order_relaxed);
+    for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex) {
+      updateRayQueryDescriptorSets(frameIndex, entities);
+    }
   }
 }
 
