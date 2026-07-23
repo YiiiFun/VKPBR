@@ -1184,6 +1184,13 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
     std::cerr << "Error: Failed to wait for in-flight fence: " << vk::to_string(fenceResult) << std::endl;
   }
 
+  if (textureSamplersDirty) {
+    watchdogProgressLabel.store("Render: refresh texture samplers", std::memory_order_relaxed);
+    textureSamplersDirty = false;
+    refreshTextureSamplers(entities);
+    watchdogProgressLabel.store("Render: after refresh texture samplers", std::memory_order_relaxed);
+  }
+
   // Reset the fence immediately after successful wait, before any new work
   watchdogProgressLabel.store("Render: reset inFlightFence", std::memory_order_relaxed);
   device.resetFences(*inFlightFences[currentFrame]);
@@ -2438,7 +2445,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         ImGui::TextDisabled("Positive LOD bias blurs distant textures earlier; negative bias keeps them sharper.");
 
         if (refreshSamplers) {
-          refreshTextureSamplers(entities);
+          textureSamplersDirty = true;
         }
       }
       if (lastCullingVisibleCount + lastCullingCulledCount > 0) {
