@@ -2416,14 +2416,14 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         const float lodBiasBefore = textureMipLodBias;
         ImGui::SliderFloat("Mipmap LOD bias", &textureMipLodBias, -2.0f, 4.0f, "%.2f");
         textureMipLodBias = std::clamp(textureMipLodBias, -2.0f, 4.0f);
-        if (std::abs(textureMipLodBias - lodBiasBefore) > 1e-4f && ImGui::IsItemDeactivatedAfterEdit()) {
+        if (std::abs(textureMipLodBias - lodBiasBefore) > 1e-4f) {
           refreshSamplers = true;
         }
 
         const float anisoBefore = samplerMaxAnisotropy;
         ImGui::SliderFloat("Sampler max anisotropy", &samplerMaxAnisotropy, 1.0f, deviceMaxAniso, "%.1f");
         samplerMaxAnisotropy = std::clamp(samplerMaxAnisotropy, 1.0f, deviceMaxAniso);
-        if (std::abs(samplerMaxAnisotropy - anisoBefore) > 1e-3f && ImGui::IsItemDeactivatedAfterEdit()) {
+        if (std::abs(samplerMaxAnisotropy - anisoBefore) > 1e-3f) {
           refreshSamplers = true;
         }
 
