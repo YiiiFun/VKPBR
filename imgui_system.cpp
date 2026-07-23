@@ -125,6 +125,7 @@ bool ImGuiSystem::Initialize(Renderer* renderer, uint32_t width, uint32_t height
   // Set display size
   io.DisplaySize = ImVec2(static_cast<float>(width), static_cast<float>(height));
   io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+  io.FontGlobalScale = 1.3f;
 
   // Inform ImGui that we support the new texture update protocol (v1.92+)
   io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
@@ -191,6 +192,10 @@ void ImGuiSystem::NewFrame() {
   frameAlreadyRendered = false;
 
   ImGui::NewFrame();
+
+  if (!visible) {
+    return;
+  }
 
   // Loading overlay: show a fullscreen progress bar while the initial scene is loading.
   // The bar resets between phases (Textures -> Scene -> AS -> Finalizing) so users
@@ -539,12 +544,18 @@ bool ImGuiSystem::WantCaptureKeyboard() const {
   if (!initialized) {
     return false;
   }
+  if (!visible) {
+    return false;
+  }
 
   return ImGui::GetIO().WantCaptureKeyboard;
 }
 
 bool ImGuiSystem::WantCaptureMouse() const {
   if (!initialized) {
+    return false;
+  }
+  if (!visible) {
     return false;
   }
 

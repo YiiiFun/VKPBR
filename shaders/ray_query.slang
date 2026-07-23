@@ -883,7 +883,9 @@ HitInfo traceRay(float3 origin, float3 direction, float tMin, float tMax, inout 
             int samples = 1;
             float softness = max(ubo.shadowSoftness, 0.0);
             int reqSamples = max(ubo.shadowSampleCount, 1);
-            if (shadowsEnabled && reqSamples > 1 && softness > 0.0 && light.lightType != 1) {
+            bool localSoftShadow = (reqSamples > 1 && softness > 0.0 && light.lightType != 1);
+            bool shadowThisLight = shadowsEnabled;
+            if (shadowsEnabled && localSoftShadow) {
                 samples = min(reqSamples, 32);
             }
 
@@ -927,7 +929,8 @@ HitInfo traceRay(float3 origin, float3 direction, float tMin, float tMax, inout 
                     float3 toLight = samplePos - result.worldPos;
                     float d = length(toLight);
                     L = (d > 1e-5) ? (toLight / d) : float3(0, 0, 1);
-                    tMaxShadow = max(d - RQ_RAY_EPS, RQ_RAY_EPS);
+                    float lightShellBias = max(0.15, min(0.75, max(light.range, 0.0) * 0.025));
+                    tMaxShadow = max(d - lightShellBias, RQ_RAY_EPS);
 
                     float attenuation = 1.0;
                     if (light.lightType == 3) {
@@ -961,7 +964,7 @@ HitInfo traceRay(float3 origin, float3 direction, float tMin, float tMax, inout 
                 }
 
                 float visibility = 1.0;
-                if (shadowsEnabled) {
+                if (shadowThisLight) {
                     // Coplanar decals (alpha BLEND) can self-occlude against the wall behind them
                     // when starting shadow rays along the surface normal. Bias along the light
                     // direction for BLEND to keep decal lighting stable under shadows.

@@ -24,6 +24,7 @@
 #include <limits>
 #include <ranges>
 #include <stdexcept>
+#include <thread>
 
 // This implementation corresponds to the Engine_Architecture chapter in the tutorial:
 // @see en/Building_a_Simple_Engine/Engine_Architecture/02_architectural_patterns.adoc
@@ -156,6 +157,8 @@ void Engine::Run() {
 
   // Main loop
   while (running) {
+    const auto frameStart = std::chrono::steady_clock::now();
+
     // Process platform events
     if (!platform->ProcessEvents()) {
       running = false;
@@ -198,6 +201,12 @@ void Engine::Run() {
 
     // Render
     Render();
+
+    constexpr auto targetFrameTime = std::chrono::microseconds(16667);
+    const auto frameElapsed = std::chrono::steady_clock::now() - frameStart;
+    if (frameElapsed < targetFrameTime) {
+      std::this_thread::sleep_for(targetFrameTime - frameElapsed);
+    }
   }
 }
 
@@ -441,6 +450,14 @@ void Engine::handleScrollInput(float yOffset) {
 }
 
 void Engine::handleKeyInput(uint32_t key, bool pressed) {
+  if (key == GLFW_KEY_U) {
+    if (pressed && !uiToggleKeyDown && imguiSystem) {
+      imguiSystem->ToggleVisible();
+    }
+    uiToggleKeyDown = pressed;
+    return;
+  }
+
   switch (key) {
     case GLFW_KEY_W:
     case GLFW_KEY_UP:
@@ -507,7 +524,9 @@ void Engine::Update(TimeDelta deltaTime) {
     imguiSystem->NewFrame();
   }
 
-  DrawCameraControlPanel();
+  if (!imguiSystem || imguiSystem->IsVisible()) {
+    DrawCameraControlPanel();
+  }
 
   // Update camera controls
   if (activeCamera) {
@@ -755,6 +774,9 @@ void Engine::DrawCameraControlPanel() {
   if (!cameraTransform)
     return;
 
+  cameraControl.uiFontScale = glm::clamp(cameraControl.uiFontScale, 0.75f, 2.5f);
+  ImGui::GetIO().FontGlobalScale = cameraControl.uiFontScale;
+
   ImGui::Begin("Camera");
 
   glm::vec3 position = cameraTransform->GetPosition();
@@ -791,6 +813,17 @@ void Engine::DrawCameraControlPanel() {
   ImGui::SliderFloat("Right-drag Pan", &cameraControl.panSensitivity, 0.0005f, 0.05f, "%.4f");
 
   ImGui::Separator();
+  if (ImGui::SliderFloat("UI Font Scale", &cameraControl.uiFontScale, 0.75f, 2.5f, "%.2f")) {
+    cameraControl.uiFontScale = glm::clamp(cameraControl.uiFontScale, 0.75f, 2.5f);
+    ImGui::GetIO().FontGlobalScale = cameraControl.uiFontScale;
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Reset")) {
+    cameraControl.uiFontScale = 1.3f;
+    ImGui::GetIO().FontGlobalScale = cameraControl.uiFontScale;
+  }
+
+  ImGui::Separator();
   ImGui::Checkbox("Enable Camera Collision", &cameraControl.collisionEnabled);
   ImGui::BeginDisabled(!cameraControl.collisionEnabled);
   ImGui::SliderFloat("Collision Radius (scene units)", &cameraControl.collisionRadius, 0.05f, 1.0f, "%.2f");
@@ -809,6 +842,7 @@ void Engine::DrawCameraControlPanel() {
   ImGui::BulletText("Left mouse drag: rotate camera");
   ImGui::BulletText("Right mouse drag: pan camera");
   ImGui::BulletText("Mouse wheel: forward/backward dolly");
+  ImGui::BulletText("U: show/hide UI");
 
   ImGui::End();
 }

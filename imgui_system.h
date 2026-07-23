@@ -114,6 +114,18 @@ class ImGuiSystem {
 	 */
     bool WantCaptureMouse() const;
 
+    bool IsVisible() const {
+      return visible;
+    }
+
+    void SetVisible(bool value) {
+      visible = value;
+    }
+
+    void ToggleVisible() {
+      visible = !visible;
+    }
+
     /**
 	 * @brief Check if ImGui has already been rendered for the current frame.
 	 * @return True if Render() was already called in NewFrame(), false otherwise.
@@ -191,6 +203,7 @@ class ImGuiSystem {
     // PBR rendering state
     bool pbrEnabled = false;
     bool blinnPhongEnabled = false;
+    bool visible = true;
 
     // Track if ImGui::Render() was already called in NewFrame() (during loading overlay)
     bool frameAlreadyRendered = false;

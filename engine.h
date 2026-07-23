@@ -263,6 +263,7 @@ class Engine
 		float     mouseSensitivity        = 0.1f;
 		float     panSensitivity          = 0.005f;
 		float     scrollStep              = 0.75f;
+		float     uiFontScale             = 1.3f;
 		bool      collisionEnabled        = false;
 		float     collisionRadius         = 0.5f;
 		bool      lastCollisionBlocked    = false;
@@ -285,6 +286,7 @@ class Engine
 	// Mouse position tracking
 	float currentMouseX = 0.0f;
 	float currentMouseY = 0.0f;
+	bool  uiToggleKeyDown = false;
 
 	/**
 	 * @brief Update the engine state.

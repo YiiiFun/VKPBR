@@ -2110,7 +2110,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
 
   // Renderer UI - available for both ray query and rasterization modes.
   // Hide UI during loading; the progress overlay is handled by ImGuiSystem::NewFrame().
-  if (imguiSystem && !imguiSystem->IsFrameRendered() && !IsLoading()) {
+  if (imguiSystem && imguiSystem->IsVisible() && !imguiSystem->IsFrameRendered() && !IsLoading()) {
     if (ImGui::Begin("Renderer")) {
       // Declare variables that need to persist across conditional blocks
       bool prevFwdPlus = useForwardPlus;

@@ -260,14 +260,13 @@ vk::SurfaceFormatKHR Renderer::chooseSwapSurfaceFormat(const std::vector<vk::Sur
 
 // Choose swap present mode
 vk::PresentModeKHR Renderer::chooseSwapPresentMode(const std::vector<vk::PresentModeKHR>& availablePresentModes) {
-  // Look for mailbox mode (triple buffering)
   for (const auto& availablePresentMode : availablePresentModes) {
-    if (availablePresentMode == vk::PresentModeKHR::eMailbox) {
+    if (availablePresentMode == vk::PresentModeKHR::eFifo) {
       return availablePresentMode;
     }
   }
 
-  // If not found, return FIFO mode (guaranteed to be available)
+  // FIFO is guaranteed by the Vulkan spec, but keep a safe fallback for malformed driver reports.
   return vk::PresentModeKHR::eFifo;
 }
 
