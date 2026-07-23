@@ -5,9 +5,10 @@
       "name": "mingw64",
       "displayName": "MSYS2 MinGW64 x64",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/mingw64-local",
+      "binaryDir": "${sourceDir}/build/mingw64",
       "environment": {
-        "VULKAN_SDK": "C:/VulkanSDK/1.4.350.0"
+        "VULKAN_SDK": "C:/msys64/mingw64",
+        "PATH": "C:/msys64/mingw64/bin;$penv{PATH}"
       },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
@@ -15,10 +16,11 @@
         "CMAKE_CXX_COMPILER": "C:/msys64/mingw64/bin/g++.exe",
         "CMAKE_MAKE_PROGRAM": "C:/msys64/mingw64/bin/ninja.exe",
         "CMAKE_PREFIX_PATH": "C:/msys64/mingw64",
-        "Vulkan_INCLUDE_DIR": "C:/VulkanSDK/1.4.350.0/Include",
+        "Vulkan_INCLUDE_DIR": "C:/msys64/mingw64/include",
         "Vulkan_LIBRARY": "C:/msys64/mingw64/lib/libvulkan-1.dll.a",
-        "VulkanHpp_INCLUDE_DIR": "C:/VulkanSDK/1.4.350.0/Include",
-        "VulkanHpp_CPPM_DIR": "C:/VulkanSDK/1.4.350.0/Include",
+        "VulkanHpp_INCLUDE_DIR": "C:/msys64/mingw64/include",
+        "VulkanHpp_CPPM_DIR": "C:/msys64/mingw64/include",
+        "SLANGC_EXECUTABLE": "${sourceDir}/.tools/slang-2026.12.0.1/bin/slangc.exe",
         "MINGW_PREFIX": "C:/msys64/mingw64",
         "ENABLE_CPP20_MODULE": "OFF",
         "ENABLE_COURSES": "OFF",

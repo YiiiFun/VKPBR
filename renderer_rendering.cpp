@@ -1147,6 +1147,26 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         break;
     }
   }
+  if (camera && lightsSubset.size() > 1) {
+    const glm::vec3 cameraPos = camera->GetPosition();
+    std::stable_sort(lightsSubset.begin(), lightsSubset.end(), [cameraPos](const ExtractedLight& a, const ExtractedLight& b) {
+      const bool aDirectional = (a.type == ExtractedLight::Type::Directional);
+      const bool bDirectional = (b.type == ExtractedLight::Type::Directional);
+      if (aDirectional != bDirectional) {
+        return aDirectional;
+      }
+      if (aDirectional) {
+        return false;
+      }
+
+      auto importance = [cameraPos](const ExtractedLight& light) {
+        const float dist2 = glm::length2(light.position - cameraPos);
+        const float rangeBoost = std::max(light.range, 0.0f) * 0.05f;
+        return (std::max(light.intensity, 0.0f) + rangeBoost) / std::max(dist2, 1.0f);
+      };
+      return importance(a) > importance(b);
+    });
+  }
   lastFrameLightCount = static_cast<uint32_t>(lightsSubset.size());
   if (!lightsSubset.empty()) {
     updateLightStorageBuffer(currentFrame, lightsSubset, camera);
@@ -1944,6 +1964,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         ubo.shadowSampleCount = std::clamp(rayQueryShadowSampleCount, 1, 32);
         ubo.shadowSoftness = std::clamp(rayQueryShadowSoftness, 0.0f, 1.0f);
         ubo.reflectionIntensity = reflectionIntensity;
+        ubo.shadowedLocalLightLimit = std::clamp(rayQueryShadowedLocalLightLimit, 0, 64);
         // Provide geometry info count for shader-side bounds checking (per-instance)
         ubo.geometryInfoCount = static_cast<int>(tlasInstanceCount);
         // Provide material buffer count for shader-side bounds checking
@@ -2261,6 +2282,9 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         if (enableRayQueryShadows) {
           ImGui::SliderInt("Shadow samples", &rayQueryShadowSampleCount, 1, 32);
           ImGui::SliderFloat("Shadow softness (fraction of range)", &rayQueryShadowSoftness, 0.0f, 0.2f, "%.3f");
+          ImGui::SliderInt("Shadowed local lights", &rayQueryShadowedLocalLightLimit, 0, 64);
+          rayQueryShadowedLocalLightLimit = std::clamp(rayQueryShadowedLocalLightLimit, 0, 64);
+          ImGui::TextDisabled("Directional lights always cast shadows; this limits point/spot/emissive shadow rays.");
         }
         ImGui::Checkbox("Enable Reflections", &enableRayQueryReflections);
         ImGui::Checkbox("Enable Transparency/Refraction", &enableRayQueryTransparency);

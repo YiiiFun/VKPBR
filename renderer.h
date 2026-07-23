@@ -174,7 +174,8 @@ struct RayQueryUniformBufferObject {
   alignas(4) int shadowSampleCount; // 1 = hard shadows; >1 = multi-sample
   alignas(4) float shadowSoftness; // 0 = hard; otherwise scales effective light radius (fraction of range)
   alignas(4) float reflectionIntensity; // User control for glass reflection strength
-  alignas(4) float _padShadow[2]{};
+  alignas(4) int shadowedLocalLightLimit; // Max local lights that cast Ray Query shadows per pixel
+  alignas(4) float _padShadow{};
 };
 
 static_assert(sizeof(RayQueryUniformBufferObject) == 288, "RayQueryUniformBufferObject size must match shader layout");
@@ -198,6 +199,8 @@ static_assert(offsetof(RayQueryUniformBufferObject, absorptionScale) == 260);
 static_assert(offsetof(RayQueryUniformBufferObject, _pad1) == 264);
 static_assert(offsetof(RayQueryUniformBufferObject, shadowSampleCount) == 268);
 static_assert(offsetof(RayQueryUniformBufferObject, shadowSoftness) == 272);
+static_assert(offsetof(RayQueryUniformBufferObject, reflectionIntensity) == 276);
+static_assert(offsetof(RayQueryUniformBufferObject, shadowedLocalLightLimit) == 280);
 
 /**
  * @brief Structure for PBR material properties.
@@ -1145,6 +1148,7 @@ class Renderer {
     bool enableRayQueryShadows = false; // Hard shadows for Ray Query direct lighting (shadow rays)
     int rayQueryShadowSampleCount = 1; // 1 = hard; >1 enables soft-shadow sampling in the shader
     float rayQueryShadowSoftness = 0.0f; // 0 = hard; otherwise scales effective light radius (fraction of range)
+    int rayQueryShadowedLocalLightLimit = 4; // Per-pixel budget for local lights that cast Ray Query shadows
     // Thick-glass controls (RQ-only)
     bool enableThickGlass = true;
     float thickGlassAbsorptionScale = 1.0f;

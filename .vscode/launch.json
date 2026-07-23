@@ -5,7 +5,7 @@
       "name": "Debug VKPBR (MinGW64)",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}\\build\\mingw64-local\\bin\\SimpleEngine.exe",
+      "program": "${workspaceFolder}\\build\\mingw64\\bin\\SimpleEngine.exe",
       "args": [],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",

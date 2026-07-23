@@ -4,7 +4,7 @@
     {
       "label": "cmake-configure-mingw64",
       "type": "process",
-      "command": "cmake",
+      "command": "C:\\msys64\\mingw64\\bin\\cmake.exe",
       "args": ["--preset", "mingw64"],
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
@@ -12,7 +12,7 @@
     {
       "label": "cmake-build-mingw64",
       "type": "process",
-      "command": "cmake",
+      "command": "C:\\msys64\\mingw64\\bin\\cmake.exe",
       "args": ["--build", "--preset", "mingw64-debug"],
       "options": { "cwd": "${workspaceFolder}" },
       "dependsOn": "cmake-configure-mingw64",

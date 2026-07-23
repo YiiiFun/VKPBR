@@ -57,7 +57,7 @@ struct RayQueryUniforms {
     [[vk::offset(268)]] int shadowSampleCount;    // 1 = hard shadows (single shadow ray)
     [[vk::offset(272)]] float shadowSoftness;     // 0 = hard; otherwise scales effective light radius (see shader)
     [[vk::offset(276)]] float reflectionIntensity; // user control
-    [[vk::offset(280)]] float _padShadow1;
+    [[vk::offset(280)]] int shadowedLocalLightLimit; // max local lights that cast shadows per pixel
     [[vk::offset(284)]] float _padShadow2;
 };
 
@@ -874,6 +874,8 @@ HitInfo traceRay(float3 origin, float3 direction, float tMin, float tMax, inout 
         float3 specularLighting = float3(0.0, 0.0, 0.0);
 
         const bool shadowsEnabled = (ubo._pad1 != 0);
+        int shadowedLocalLights = 0;
+        int shadowedLocalLimit = max(ubo.shadowedLocalLightLimit, 0);
         int lc = max(ubo.lightCount, 0);
         for (int li = 0; li < lc; ++li) {
             LightData light = lightBuffer[li];
@@ -884,8 +886,16 @@ HitInfo traceRay(float3 origin, float3 direction, float tMin, float tMax, inout 
             float softness = max(ubo.shadowSoftness, 0.0);
             int reqSamples = max(ubo.shadowSampleCount, 1);
             bool localSoftShadow = (reqSamples > 1 && softness > 0.0 && light.lightType != 1);
-            bool shadowThisLight = shadowsEnabled;
-            if (shadowsEnabled && localSoftShadow) {
+            bool localLight = (light.lightType != 1);
+            bool localShadowAllowed = false;
+            if (shadowsEnabled && localLight) {
+                localShadowAllowed = (shadowedLocalLights < shadowedLocalLimit);
+                if (localShadowAllowed) {
+                    shadowedLocalLights += 1;
+                }
+            }
+            bool shadowThisLight = shadowsEnabled && (!localLight || localShadowAllowed);
+            if (shadowThisLight && localSoftShadow) {
                 samples = min(reqSamples, 32);
             }
 

@@ -1,6 +1,10 @@
 {
   "cmake.sourceDirectory": "${workspaceFolder}",
+  "cmake.cmakePath": "C:/msys64/mingw64/bin/cmake.exe",
   "cmake.useCMakePresets": "always",
+  "cmake.configurePreset": "mingw64",
+  "cmake.buildPreset": "mingw64-debug",
+  "cmake.buildDirectory": "${workspaceFolder}/build/mingw64",
   "cmake.configureOnOpen": false,
   "C_Cpp.formatting": "clangFormat",
   "files.encoding": "utf8"

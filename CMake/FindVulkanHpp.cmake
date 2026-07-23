@@ -72,35 +72,19 @@ function(extract_vulkan_version VULKAN_CORE_H_PATH OUTPUT_VERSION_TAG)
         set(${OUTPUT_VERSION_TAG} "v1.3.275" PARENT_SCOPE)
         return()
     endif ()
-  # Extract the version information from vulkan_core.h
-  file(STRINGS ${VULKAN_CORE_H_PATH} VULKAN_VERSION_MAJOR_LINE REGEX "^#define VK_VERSION_MAJOR")
-  file(STRINGS ${VULKAN_CORE_H_PATH} VULKAN_VERSION_MINOR_LINE REGEX "^#define VK_VERSION_MINOR")
+  # VK_VERSION_MAJOR/MINOR are function-like macros in current headers, so
+  # parse the concrete VK_HEADER_VERSION_COMPLETE value instead.
+  file(STRINGS ${VULKAN_CORE_H_PATH} VULKAN_HEADER_VERSION_COMPLETE_LINE REGEX "^#define VK_HEADER_VERSION_COMPLETE")
   file(STRINGS ${VULKAN_CORE_H_PATH} VULKAN_HEADER_VERSION_LINE REGEX "^#define VK_HEADER_VERSION")
 
   set(VERSION_TAG "v1.3.275") # Default fallback
 
-  if(VULKAN_VERSION_MAJOR_LINE AND VULKAN_VERSION_MINOR_LINE AND VULKAN_HEADER_VERSION_LINE)
-    string(REGEX REPLACE "^#define VK_VERSION_MAJOR[ \t]+([0-9]+).*$" "\\1" VULKAN_VERSION_MAJOR "${VULKAN_VERSION_MAJOR_LINE}")
-    string(REGEX REPLACE "^#define VK_VERSION_MINOR[ \t]+([0-9]+).*$" "\\1" VULKAN_VERSION_MINOR "${VULKAN_VERSION_MINOR_LINE}")
+  if(VULKAN_HEADER_VERSION_COMPLETE_LINE AND VULKAN_HEADER_VERSION_LINE)
     string(REGEX REPLACE "^#define VK_HEADER_VERSION[ \t]+([0-9]+).*$" "\\1" VULKAN_HEADER_VERSION "${VULKAN_HEADER_VERSION_LINE}")
-
-    # Construct the version tag
-    set(VERSION_TAG "v${VULKAN_VERSION_MAJOR}.${VULKAN_VERSION_MINOR}.${VULKAN_HEADER_VERSION}")
-  else()
-    # Alternative approach: look for VK_HEADER_VERSION_COMPLETE
-    file(STRINGS ${VULKAN_CORE_H_PATH} VULKAN_HEADER_VERSION_COMPLETE_LINE REGEX "^#define VK_HEADER_VERSION_COMPLETE")
-    file(STRINGS ${VULKAN_CORE_H_PATH} VULKAN_HEADER_VERSION_LINE REGEX "^#define VK_HEADER_VERSION")
-
-    if(VULKAN_HEADER_VERSION_COMPLETE_LINE AND VULKAN_HEADER_VERSION_LINE)
-      # Extract the header version
-      string(REGEX REPLACE "^#define VK_HEADER_VERSION[ \t]+([0-9]+).*$" "\\1" VULKAN_HEADER_VERSION "${VULKAN_HEADER_VERSION_LINE}")
-
-      # Check if the complete version line contains the major and minor versions
-      if(VULKAN_HEADER_VERSION_COMPLETE_LINE MATCHES "VK_MAKE_API_VERSION\\(.*,[ \t]*([0-9]+),[ \t]*([0-9]+),[ \t]*VK_HEADER_VERSION\\)")
-        set(VULKAN_VERSION_MAJOR "${CMAKE_MATCH_1}")
-        set(VULKAN_VERSION_MINOR "${CMAKE_MATCH_2}")
-        set(VERSION_TAG "v${VULKAN_VERSION_MAJOR}.${VULKAN_VERSION_MINOR}.${VULKAN_HEADER_VERSION}")
-      endif()
+    if(VULKAN_HEADER_VERSION_COMPLETE_LINE MATCHES "VK_MAKE_API_VERSION\\([^,]+,[ \t]*([0-9]+),[ \t]*([0-9]+),[ \t]*VK_HEADER_VERSION\\)")
+      set(VULKAN_VERSION_MAJOR "${CMAKE_MATCH_1}")
+      set(VULKAN_VERSION_MINOR "${CMAKE_MATCH_2}")
+      set(VERSION_TAG "v${VULKAN_VERSION_MAJOR}.${VULKAN_VERSION_MINOR}.${VULKAN_HEADER_VERSION}")
     endif()
   endif()
 
@@ -172,7 +156,9 @@ endif()
 if(ENABLE_COURSES)
     set(VULKAN_REQUIRED_HEADER_VERSION "1.4.351")
 else()
-    set(VULKAN_REQUIRED_HEADER_VERSION "1.4.350")
+    # Core renderer features compile against the matching MSYS2 1.4 headers.
+    # VK_KHR_opacity_micromap is isolated behind ENABLE_COURSES below.
+    set(VULKAN_REQUIRED_HEADER_VERSION "1.4.0")
 endif()
 string(REGEX REPLACE "^v" "" VULKAN_VERSION_NUM "${VULKAN_VERSION_TAG}")
 if (VULKAN_VERSION_NUM VERSION_LESS VULKAN_REQUIRED_HEADER_VERSION)
@@ -220,7 +206,7 @@ endif ()
 if(ENABLE_COURSES)
     set(VULKAN_KHR_OMM_MIN_HEADER_VERSION 351)
 else()
-    set(VULKAN_KHR_OMM_MIN_HEADER_VERSION 350)
+    set(VULKAN_KHR_OMM_MIN_HEADER_VERSION 0)
 endif()
 set(VULKAN_HEADERS_SUFFICIENT FALSE)
 
@@ -241,7 +227,11 @@ if (VULKAN_CORE_H AND EXISTS "${VULKAN_CORE_H}")
             NOT _vk_patch LESS VULKAN_KHR_OMM_MIN_HEADER_VERSION))
         set(VULKAN_HEADERS_SUFFICIENT TRUE)
     endif ()
-    message(STATUS "Installed Vulkan headers: ${_vk_major}.${_vk_minor}.${_vk_patch} — need >= 1.4.${VULKAN_KHR_OMM_MIN_HEADER_VERSION} for VK_KHR_opacity_micromap")
+    if(ENABLE_COURSES)
+        message(STATUS "Installed Vulkan headers: ${_vk_major}.${_vk_minor}.${_vk_patch} — need >= 1.4.${VULKAN_KHR_OMM_MIN_HEADER_VERSION} for VK_KHR_opacity_micromap")
+    else()
+        message(STATUS "Installed Vulkan headers: ${_vk_major}.${_vk_minor}.${_vk_patch}; course opacity micromaps are disabled")
+    endif()
     unset(_vk_hdr_line)
     unset(_vk_cmp_line)
     unset(_vk_patch)
@@ -391,59 +381,11 @@ export namespace vk {
   endif()
 endif()
 
-# If the Vulkan Profiles include directory wasn't found, use FetchContent to download
+# Vulkan Profiles is optional and is not used by this renderer. Do not turn an
+# otherwise self-contained build into a network operation just to manufacture a
+# header stub.
 if(NOT VulkanProfiles_INCLUDE_DIR)
-  # If not found, use FetchContent to download
-  include(FetchContent)
-
-  message(STATUS "Vulkan-Profiles not found, fetching from GitHub main branch...")
-  FetchContent_Declare(
-    VulkanProfiles
-    GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Profiles.git
-    GIT_TAG main  # Use main branch instead of a specific tag
-  )
-
-  # Set policy to suppress the deprecation warning
-  if(POLICY CMP0169)
-    cmake_policy(SET CMP0169 OLD)
-  endif()
-
-  # Populate the content
-  FetchContent_GetProperties(VulkanProfiles SOURCE_DIR VulkanProfiles_SOURCE_DIR)
-  if(NOT VulkanProfiles_POPULATED)
-    FetchContent_Populate(VulkanProfiles)
-    # Get the source directory after populating
-    FetchContent_GetProperties(VulkanProfiles SOURCE_DIR VulkanProfiles_SOURCE_DIR)
-  endif()
-
-  # Create the include directory structure if it doesn't exist
-  set(VulkanProfiles_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/VulkanProfiles/include)
-  file(MAKE_DIRECTORY ${VulkanProfiles_INCLUDE_DIR}/vulkan)
-
-  # Create a stub vulkan_profiles.hpp file if it doesn't exist
-  if(NOT EXISTS "${VulkanProfiles_INCLUDE_DIR}/vulkan/vulkan_profiles.hpp")
-    file(WRITE "${VulkanProfiles_INCLUDE_DIR}/vulkan/vulkan_profiles.hpp"
-"// Auto-generated vulkan_profiles.hpp stub file
-#pragma once
-#include <vulkan/vulkan.hpp>
-
-namespace vp {
-    // Stub implementation for Vulkan Profiles
-    struct ProfileDesc {
-        const char* name;
-        uint32_t specVersion;
-    };
-
-    inline bool GetProfileSupport(VkPhysicalDevice physicalDevice, const ProfileDesc* pProfile, VkBool32* pSupported) {
-        *pSupported = VK_TRUE;
-        return true;
-    }
-}
-")
-  endif()
-
-  message(STATUS "VulkanProfiles_SOURCE_DIR: ${VulkanProfiles_SOURCE_DIR}")
-  message(STATUS "VulkanProfiles_INCLUDE_DIR: ${VulkanProfiles_INCLUDE_DIR}")
+  message(STATUS "Vulkan-Profiles not found; continuing because the renderer does not use it")
 endif()
 
 # Set the variables
