@@ -263,6 +263,13 @@ bool Renderer::Initialize(const std::string& appName, bool enableValidationLayer
   }
   LOGI("SSAO pipelines created successfully");
 
+  LOGI("Creating GTAO pipeline...");
+  if (!createGTAOPipeline()) {
+    LOGW("Failed to create GTAO pipeline (non-fatal, SSAO still available)");
+  } else {
+    LOGI("GTAO pipeline created successfully");
+  }
+
   // Create shared resources for rendering compute passes.
   LOGI("Creating compute resources...");
   if (!createComputeResources()) {

@@ -8,6 +8,7 @@ struct SSAOParams {
     column_major float4x4 invProj;
     float4 screenRadiusBias;   // x=width, y=height, z=radius, w=bias
     float4 intensitySamples;   // x=intensity, y=sampleCount, z=reserved, w=reserved
+    float4 gtaoParams;         // x=directions, y=steps, z=thickness, w=falloff
 };
 
 [[vk::binding(0, 0)]] Sampler2D depthTex;

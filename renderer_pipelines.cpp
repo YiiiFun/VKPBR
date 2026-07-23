@@ -879,7 +879,7 @@ bool Renderer::createSSAOPipelines() {
     };
     ssaoDescriptorSetLayout = vk::raii::DescriptorSetLayout(device, ssaoLayoutInfo);
 
-    std::array<vk::DescriptorSetLayoutBinding, 3> blurBindings = {
+    std::array<vk::DescriptorSetLayoutBinding, 4> blurBindings = {
       vk::DescriptorSetLayoutBinding{
         .binding = 0,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
@@ -897,6 +897,13 @@ bool Renderer::createSSAOPipelines() {
       vk::DescriptorSetLayoutBinding{
         .binding = 2,
         .descriptorType = vk::DescriptorType::eUniformBuffer,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eCompute,
+        .pImmutableSamplers = nullptr
+      },
+      vk::DescriptorSetLayoutBinding{
+        .binding = 3,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = 1,
         .stageFlags = vk::ShaderStageFlagBits::eCompute,
         .pImmutableSamplers = nullptr
@@ -943,6 +950,37 @@ bool Renderer::createSSAOPipelines() {
     return true;
   } catch (const std::exception& e) {
     std::cerr << "Failed to create SSAO pipelines: " << e.what() << std::endl;
+    return false;
+  }
+}
+
+bool Renderer::createGTAOPipeline() {
+  try {
+    // GTAO shares the SSAO descriptor set layout (depth + AO output + UBO).
+    if (!*ssaoDescriptorSetLayout) {
+      std::cerr << "Cannot create GTAO pipeline: SSAO descriptor set layout is null" << std::endl;
+      return false;
+    }
+
+    auto gtaoCode = readFile("shaders/gtao.spv");
+    vk::raii::ShaderModule gtaoModule = createShaderModule(gtaoCode);
+
+    vk::PipelineLayoutCreateInfo gtaoPLInfo{
+      .setLayoutCount = 1,
+      .pSetLayouts = &*ssaoDescriptorSetLayout
+    };
+    gtaoPipelineLayout = vk::raii::PipelineLayout(device, gtaoPLInfo);
+
+    vk::PipelineShaderStageCreateInfo gtaoStage{
+      .stage = vk::ShaderStageFlagBits::eCompute,
+      .module = *gtaoModule,
+      .pName = "main"
+    };
+    vk::ComputePipelineCreateInfo gtaoInfo{.stage = gtaoStage, .layout = *gtaoPipelineLayout};
+    gtaoPipeline = vk::raii::Pipeline(device, nullptr, gtaoInfo);
+    return true;
+  } catch (const std::exception& e) {
+    std::cerr << "Failed to create GTAO pipeline: " << e.what() << std::endl;
     return false;
   }
 }

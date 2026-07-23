@@ -1323,7 +1323,7 @@ bool Renderer::createDescriptorPool() {
       },
       vk::DescriptorPoolSize{
         .type = vk::DescriptorType::eCombinedImageSampler,
-        .descriptorCount = textureDescriptors + rqTexDescriptors
+        .descriptorCount = textureDescriptors + rqTexDescriptors + MAX_FRAMES_IN_FLIGHT
       },
       vk::DescriptorPoolSize{
         .type = vk::DescriptorType::eStorageBuffer,
@@ -2493,10 +2493,17 @@ void Renderer::createSSAODescriptorSets() {
       .imageView = *ssaoBlurImageViews[i],
       .imageLayout = vk::ImageLayout::eGeneral
     };
-    std::array<vk::WriteDescriptorSet, 3> blurWrites = {
+    // Depth binding for bilateral blur (binding 3) – uses the same depth view as SSAO
+    vk::DescriptorImageInfo blurDepthInfo{
+      .sampler = *ssaoSampler,
+      .imageView = *depthImageView,
+      .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal
+    };
+    std::array<vk::WriteDescriptorSet, 4> blurWrites = {
       vk::WriteDescriptorSet{.dstSet = *ssaoBlurDescriptorSets[i], .dstBinding = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &rawSampleInfo},
       vk::WriteDescriptorSet{.dstSet = *ssaoBlurDescriptorSets[i], .dstBinding = 1, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &blurStorageInfo},
-      vk::WriteDescriptorSet{.dstSet = *ssaoBlurDescriptorSets[i], .dstBinding = 2, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eUniformBuffer, .pBufferInfo = &uboInfo}
+      vk::WriteDescriptorSet{.dstSet = *ssaoBlurDescriptorSets[i], .dstBinding = 2, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eUniformBuffer, .pBufferInfo = &uboInfo},
+      vk::WriteDescriptorSet{.dstSet = *ssaoBlurDescriptorSets[i], .dstBinding = 3, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &blurDepthInfo}
     };
     {
       std::lock_guard<std::mutex> lk(descriptorMutex);
@@ -2523,8 +2530,24 @@ void Renderer::updateSSAODepthInputForFrame(uint32_t frameIndex, vk::ImageView d
     .descriptorType = vk::DescriptorType::eCombinedImageSampler,
     .pImageInfo = &depthInfo
   };
+
+  // Also update the bilateral blur depth binding (binding 3) for the same frame.
+  std::vector<vk::WriteDescriptorSet> writes;
+  writes.push_back(depthWrite);
+  if (frameIndex < ssaoBlurDescriptorSets.size()) {
+    vk::WriteDescriptorSet blurDepthWrite{
+      .dstSet = *ssaoBlurDescriptorSets[frameIndex],
+      .dstBinding = 3,
+      .dstArrayElement = 0,
+      .descriptorCount = 1,
+      .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+      .pImageInfo = &depthInfo
+    };
+    writes.push_back(blurDepthWrite);
+  }
+
   std::lock_guard<std::mutex> lk(descriptorMutex);
-  device.updateDescriptorSets(depthWrite, {});
+  device.updateDescriptorSets(writes, {});
 }
 
 void Renderer::createCompositeDescriptorSets() {

@@ -720,6 +720,7 @@ void Renderer::cleanupSwapChain() {
   compositePipeline = vk::raii::Pipeline(nullptr);
   ssaoPipeline = vk::raii::Pipeline(nullptr);
   ssaoBlurPipeline = vk::raii::Pipeline(nullptr);
+  gtaoPipeline = vk::raii::Pipeline(nullptr);
 
   // Clean up pipeline layouts
   pipelineLayout = vk::raii::PipelineLayout(nullptr);
@@ -729,6 +730,7 @@ void Renderer::cleanupSwapChain() {
   compositePipelineLayout = vk::raii::PipelineLayout(nullptr);
   ssaoPipelineLayout = vk::raii::PipelineLayout(nullptr);
   ssaoBlurPipelineLayout = vk::raii::PipelineLayout(nullptr);
+  gtaoPipelineLayout = vk::raii::PipelineLayout(nullptr);
 
   // Clean up sync objects (they need to be recreated with new swap chain image count)
   imageAvailableSemaphores.clear();
@@ -837,6 +839,7 @@ void Renderer::recreateSwapChain() {
   createLightingPipeline();
   createCompositePipeline();
   createSSAOPipelines();
+  createGTAOPipeline();
   createSSAOResources();
   createTransparentDescriptorSets();
   createTransparentFallbackDescriptorSets();
@@ -961,15 +964,26 @@ void Renderer::updateSSAOUniformBuffer(uint32_t frameIndex, CameraComponent *cam
     static_cast<float>(std::clamp(ssaoSampleCount, 4, 64)),
     ssaoBlurEnabled ? 1.0f : 0.0f,
     0.0f);
+  ubo.gtaoParams = glm::vec4(
+    static_cast<float>(std::clamp(gtaoDirections, 1, 16)),
+    static_cast<float>(std::clamp(gtaoSteps, 1, 32)),
+    std::clamp(gtaoThickness, 0.01f, 2.0f),
+    std::clamp(gtaoFalloff, 0.0f, 1.0f));
   std::memcpy(ssaoUniformBuffersMapped[frameIndex], &ubo, sizeof(SSAOUniformBufferObject));
 }
 
 void Renderer::dispatchSSAO(vk::raii::CommandBuffer& cmd) {
-  if (!ssaoEnabled && !ssaoDebugView)
+  if (aoMode == AOMode::Off && !ssaoDebugView)
     return;
-  if (!*ssaoPipeline || !*ssaoBlurPipeline || currentFrame >= ssaoDescriptorSets.size() ||
+  if (!*ssaoBlurPipeline || currentFrame >= ssaoDescriptorSets.size() ||
       currentFrame >= ssaoBlurDescriptorSets.size() || currentFrame >= ssaoRawImages.size() ||
       currentFrame >= ssaoBlurImages.size())
+    return;
+
+  // Choose AO pipeline based on mode
+  vk::Pipeline aoPipeline = (aoMode == AOMode::GTAO && *gtaoPipeline) ? *gtaoPipeline : *ssaoPipeline;
+  vk::PipelineLayout aoPipelineLayout = (aoMode == AOMode::GTAO && *gtaoPipeline) ? *gtaoPipelineLayout : *ssaoPipelineLayout;
+  if (!aoPipeline)
     return;
 
   const uint32_t groupsX = (swapChainExtent.width + 7u) / 8u;
@@ -995,8 +1009,8 @@ void Renderer::dispatchSSAO(vk::raii::CommandBuffer& cmd) {
   cmd.pipelineBarrier2(rawToGeneralDep);
   ssaoRawImageLayouts[currentFrame] = vk::ImageLayout::eGeneral;
 
-  cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *ssaoPipeline);
-  cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *ssaoPipelineLayout, 0, {*ssaoDescriptorSets[currentFrame]}, {});
+  cmd.bindPipeline(vk::PipelineBindPoint::eCompute, aoPipeline);
+  cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, aoPipelineLayout, 0, {*ssaoDescriptorSets[currentFrame]}, {});
   cmd.dispatch(groupsX, groupsY, 1);
 
   vk::ImageMemoryBarrier2 rawToRead{
@@ -2489,18 +2503,36 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
 
       ImGui::Separator();
       ImGui::Text("Ambient Occlusion:");
-      ImGui::Checkbox("Enable SSAO", &ssaoEnabled);
+      {
+        const char* aoModeNames[] = {"Off", "SSAO", "GTAO"};
+        int aoModeInt = static_cast<int>(aoMode);
+        ImGui::Combo("AO Mode", &aoModeInt, aoModeNames, 3);
+        aoMode = static_cast<AOMode>(aoModeInt);
+        ssaoEnabled = (aoMode != AOMode::Off);
+      }
       ImGui::Checkbox("AO Debug View", &ssaoDebugView);
-      ImGui::BeginDisabled(!ssaoEnabled && !ssaoDebugView);
-      ImGui::SliderFloat("SSAO radius", &ssaoRadius, 0.05f, 3.0f, "%.2f");
-      ImGui::SliderFloat("SSAO bias", &ssaoBias, 0.0f, 0.15f, "%.3f");
-      ImGui::SliderFloat("SSAO intensity", &ssaoIntensity, 0.0f, 1.0f, "%.2f");
-      ImGui::SliderInt("SSAO samples", &ssaoSampleCount, 4, 64);
-      ssaoSampleCount = std::clamp(ssaoSampleCount, 4, 64);
-      ImGui::Checkbox("SSAO blur", &ssaoBlurEnabled);
+      ImGui::BeginDisabled(aoMode == AOMode::Off && !ssaoDebugView);
+      ImGui::SliderFloat("AO radius", &ssaoRadius, 0.05f, 3.0f, "%.2f");
+      ImGui::SliderFloat("AO bias", &ssaoBias, 0.0f, 0.15f, "%.3f");
+      ImGui::SliderFloat("AO intensity", &ssaoIntensity, 0.0f, 1.0f, "%.2f");
+      // SSAO-specific sample count (GTAO uses directions/steps instead)
+      if (aoMode == AOMode::SSAO) {
+        ImGui::SliderInt("SSAO samples", &ssaoSampleCount, 4, 64);
+        ssaoSampleCount = std::clamp(ssaoSampleCount, 4, 64);
+      }
+      // GTAO-specific parameters
+      if (aoMode == AOMode::GTAO) {
+        ImGui::SliderInt("GTAO directions", &gtaoDirections, 1, 16);
+        gtaoDirections = std::clamp(gtaoDirections, 1, 16);
+        ImGui::SliderInt("GTAO steps", &gtaoSteps, 1, 32);
+        gtaoSteps = std::clamp(gtaoSteps, 1, 32);
+        ImGui::SliderFloat("GTAO thickness", &gtaoThickness, 0.01f, 2.0f, "%.2f");
+        ImGui::SliderFloat("GTAO falloff", &gtaoFalloff, 0.0f, 1.0f, "%.2f");
+      }
+      ImGui::Checkbox("AO blur", &ssaoBlurEnabled);
       ImGui::EndDisabled();
-      ImGui::BeginDisabled(!ssaoEnabled);
-      ImGui::SliderFloat("SSAO strength", &ssaoCompositeStrength, 0.0f, 1.0f, "%.2f");
+      ImGui::BeginDisabled(aoMode == AOMode::Off);
+      ImGui::SliderFloat("AO strength", &ssaoCompositeStrength, 0.0f, 1.0f, "%.2f");
       ImGui::EndDisabled();
 
       // === LIGHT GROUP CONTROLS ===
