@@ -1311,8 +1311,8 @@ bool Renderer::createDescriptorPool() {
     // Acceleration structure descriptors: Ray query needs 1 TLAS descriptor per frame
     const uint32_t accelerationStructureDescriptors = MAX_FRAMES_IN_FLIGHT;
 
-    // Storage image descriptors: Ray query output plus SSAO raw/blur outputs per frame.
-    const uint32_t storageImageDescriptors = MAX_FRAMES_IN_FLIGHT * 3u;
+    // Storage image descriptors: Ray query color/depth outputs plus SSAO raw/blur outputs per frame.
+    const uint32_t storageImageDescriptors = MAX_FRAMES_IN_FLIGHT * 4u;
 
     // Reserve extra combined image sampler capacity for Ray Query binding 6 (baseColor texture array)
     const uint32_t rqTexDescriptors = MAX_FRAMES_IN_FLIGHT * RQ_MAX_TEX;
@@ -2503,6 +2503,28 @@ void Renderer::createSSAODescriptorSets() {
       device.updateDescriptorSets(blurWrites, {});
     }
   }
+}
+
+void Renderer::updateSSAODepthInputForFrame(uint32_t frameIndex, vk::ImageView depthView, vk::ImageLayout depthLayout) {
+  if (frameIndex >= ssaoDescriptorSets.size() || !*ssaoSampler || !depthView) {
+    return;
+  }
+
+  vk::DescriptorImageInfo depthInfo{
+    .sampler = *ssaoSampler,
+    .imageView = depthView,
+    .imageLayout = depthLayout
+  };
+  vk::WriteDescriptorSet depthWrite{
+    .dstSet = *ssaoDescriptorSets[frameIndex],
+    .dstBinding = 0,
+    .dstArrayElement = 0,
+    .descriptorCount = 1,
+    .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+    .pImageInfo = &depthInfo
+  };
+  std::lock_guard<std::mutex> lk(descriptorMutex);
+  device.updateDescriptorSets(depthWrite, {});
 }
 
 void Renderer::createCompositeDescriptorSets() {

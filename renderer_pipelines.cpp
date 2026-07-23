@@ -1231,8 +1231,8 @@ void Renderer::pushMaterialProperties(vk::CommandBuffer commandBuffer, const Mat
 }
 
 bool Renderer::createRayQueryDescriptorSetLayout() {
-  // Production layout: 7 bindings (0..6), no debug buffer at 7
-  std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
+  // Production layout: bindings 0..6 for ray query shading, binding 7 for SSAO depth output.
+  std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
 
   // Binding 0: UBO (UniformBufferObject)
   bindings[0].binding = 0;
@@ -1276,11 +1276,17 @@ bool Renderer::createRayQueryDescriptorSetLayout() {
   bindings[6].descriptorCount = RQ_MAX_TEX; // large static array
   bindings[6].stageFlags = vk::ShaderStageFlagBits::eCompute;
 
+  // Binding 7: linearized screen depth output for shared SSAO post-process
+  bindings[7].binding = 7;
+  bindings[7].descriptorType = vk::DescriptorType::eStorageImage;
+  bindings[7].descriptorCount = 1;
+  bindings[7].stageFlags = vk::ShaderStageFlagBits::eCompute;
+
   // Descriptor indexing / update-after-bind support:
   // The ray query shader indexes a large `eCombinedImageSampler` array with a per-pixel varying index.
   // On some drivers this requires descriptor indexing features + layout binding flags to avoid the
   // array collapsing to slot 0 (resulting in "no textures" even when `texIndex>0`).
-  std::array<vk::DescriptorBindingFlags, 7> bindingFlags{};
+  std::array<vk::DescriptorBindingFlags, 8> bindingFlags{};
   bool useUpdateAfterBind = false;
   if (descriptorIndexingEnabled) {
     if (descriptorBindingSampledImageUpdateAfterBindEnabled) {
@@ -1410,6 +1416,43 @@ bool Renderer::createRayQueryResources() {
     // Transition output image to GENERAL layout for compute shader writes
     transitionImageLayout(*rayQueryOutputImage,
                           rqFormat,
+                          vk::ImageLayout::eUndefined,
+                          vk::ImageLayout::eGeneral,
+                          1);
+
+    rayQueryDepthFormat = vk::Format::eR32Sfloat; {
+      auto props = physicalDevice.getFormatProperties(rayQueryDepthFormat);
+      if (!(props.optimalTilingFeatures & vk::FormatFeatureFlagBits::eStorageImage)) {
+        rayQueryDepthFormat = vk::Format::eR16Sfloat;
+      }
+    }
+    auto [depthImage, depthAllocation] = memoryPool->createImage(
+      swapChainExtent.width,
+      swapChainExtent.height,
+      rayQueryDepthFormat,
+      vk::ImageTiling::eOptimal,
+      vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
+      vk::MemoryPropertyFlagBits::eDeviceLocal,
+      1,
+      vk::SharingMode::eExclusive,
+      {}
+    );
+    rayQueryDepthImage = std::move(depthImage);
+    rayQueryDepthImageAllocation = std::move(depthAllocation);
+
+    vk::ImageViewCreateInfo depthViewInfo{};
+    depthViewInfo.image = *rayQueryDepthImage;
+    depthViewInfo.viewType = vk::ImageViewType::e2D;
+    depthViewInfo.format = rayQueryDepthFormat;
+    depthViewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    depthViewInfo.subresourceRange.baseMipLevel = 0;
+    depthViewInfo.subresourceRange.levelCount = 1;
+    depthViewInfo.subresourceRange.baseArrayLayer = 0;
+    depthViewInfo.subresourceRange.layerCount = 1;
+    rayQueryDepthImageView = vk::raii::ImageView(device, depthViewInfo);
+
+    transitionImageLayout(*rayQueryDepthImage,
+                          rayQueryDepthFormat,
                           vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eGeneral,
                           1);

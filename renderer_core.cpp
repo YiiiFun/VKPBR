@@ -593,6 +593,9 @@ void Renderer::Cleanup() {
   rayQueryOutputImageView = nullptr;
   rayQueryOutputImage = nullptr;
   rayQueryOutputImageAllocation = nullptr;
+  rayQueryDepthImageView = nullptr;
+  rayQueryDepthImage = nullptr;
+  rayQueryDepthImageAllocation = nullptr;
 
   // Clear acceleration structures (BLAS and TLAS buffers)
   blasStructures.clear();

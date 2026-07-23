@@ -61,13 +61,13 @@ void main(uint3 id : SV_DispatchThreadID)
 
     float3 centerVS = ReconstructViewPosition(uv, depth);
     float3 normalVS = ReconstructNormal(uv, texelSize, centerVS);
-    if (normalVS.z > 0.0) {
+    if (normalVS.z < 0.0) {
         normalVS = -normalVS;
     }
 
     float radius = max(params.screenRadiusBias.z, 0.001);
     float bias = max(params.screenRadiusBias.w, 0.0);
-    float intensity = max(params.intensitySamples.x, 0.0);
+    float intensity = saturate(params.intensitySamples.x);
     uint sampleCount = clamp((uint)params.intensitySamples.y, 1u, 64u);
 
     float rand = Hash12(float2(id.xy));
@@ -99,10 +99,14 @@ void main(uint3 id : SV_DispatchThreadID)
         }
 
         float3 surfaceVS = ReconstructViewPosition(sampleUV, sampleDepth);
-        float rangeWeight = smoothstep(0.0, 1.0, radius / max(abs(centerVS.z - surfaceVS.z), 1e-4));
-        occlusion += ((surfaceVS.z >= sampleVS.z + bias) ? 1.0 : 0.0) * rangeWeight;
+        float3 surfaceDelta = surfaceVS - centerVS;
+        float dist = length(surfaceVS - centerVS);
+        float rangeWeight = 1.0 - smoothstep(radius * 0.35, radius, dist);
+        float facingWeight = dist > 1e-5 ? saturate(dot(surfaceDelta / dist, normalVS) * 1.5) : 0.0;
+        occlusion += ((surfaceVS.z >= sampleVS.z + bias) ? 1.0 : 0.0) * rangeWeight * facingWeight;
     }
 
-    float ao = 1.0 - (occlusion / float(sampleCount)) * intensity;
-    aoOut[id.xy] = saturate(ao);
+    float rawAO = saturate(1.0 - occlusion / float(sampleCount));
+    float ao = lerp(1.0, rawAO, intensity);
+    aoOut[id.xy] = max(ao, 0.45);
 }

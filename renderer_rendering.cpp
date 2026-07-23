@@ -828,6 +828,9 @@ void Renderer::recreateSwapChain() {
   rayQueryOutputImageView = vk::raii::ImageView(nullptr);
   rayQueryOutputImage = vk::raii::Image(nullptr);
   rayQueryOutputImageAllocation = nullptr;
+  rayQueryDepthImageView = vk::raii::ImageView(nullptr);
+  rayQueryDepthImage = vk::raii::Image(nullptr);
+  rayQueryDepthImageAllocation = nullptr;
 
   createGraphicsPipeline();
   createPBRPipeline();
@@ -954,7 +957,7 @@ void Renderer::updateSSAOUniformBuffer(uint32_t frameIndex, CameraComponent *cam
     std::clamp(ssaoRadius, 0.05f, 5.0f),
     std::clamp(ssaoBias, 0.0f, 0.2f));
   ubo.intensitySamples = glm::vec4(
-    std::clamp(ssaoIntensity, 0.0f, 4.0f),
+    std::clamp(ssaoIntensity, 0.0f, 1.0f),
     static_cast<float>(std::clamp(ssaoSampleCount, 4, 64)),
     ssaoBlurEnabled ? 1.0f : 0.0f,
     0.0f);
@@ -2143,6 +2146,29 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       depRQToSample.pImageMemoryBarriers = &rqToSample;
       commandBuffers[currentFrame].pipelineBarrier2(depRQToSample);
 
+      const bool runRayQuerySSAO = (ssaoEnabled || ssaoDebugView) && !IsLoading() && !!*rayQueryDepthImageView;
+      if (runRayQuerySSAO) {
+        vk::ImageMemoryBarrier2 rqDepthToSample{};
+        rqDepthToSample.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+        rqDepthToSample.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
+        rqDepthToSample.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+        rqDepthToSample.dstAccessMask = vk::AccessFlagBits2::eShaderRead;
+        rqDepthToSample.oldLayout = vk::ImageLayout::eGeneral;
+        rqDepthToSample.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        rqDepthToSample.image = *rayQueryDepthImage;
+        rqDepthToSample.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        rqDepthToSample.subresourceRange.levelCount = 1;
+        rqDepthToSample.subresourceRange.layerCount = 1;
+
+        vk::DependencyInfo depRQDepthToSample{};
+        depRQDepthToSample.imageMemoryBarrierCount = 1;
+        depRQDepthToSample.pImageMemoryBarriers = &rqDepthToSample;
+        commandBuffers[currentFrame].pipelineBarrier2(depRQDepthToSample);
+
+        updateSSAODepthInputForFrame(currentFrame, *rayQueryDepthImageView, vk::ImageLayout::eShaderReadOnlyOptimal);
+        dispatchSSAO(commandBuffers[currentFrame]);
+      }
+
       // Composite fullscreen: sample rayQueryOutputImage to the swapchain using the composite pipeline
       // Transition swapchain image to COLOR_ATTACHMENT_OPTIMAL
       vk::ImageMemoryBarrier2 swapchainToColor{};
@@ -2202,9 +2228,9 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       pc2.exposure = std::clamp(this->exposure, 0.2f, 4.0f);
       pc2.gamma = this->gamma;
       pc2.outputIsSRGB = (swapChainImageFormat == vk::Format::eR8G8B8A8Srgb || swapChainImageFormat == vk::Format::eB8G8R8A8Srgb) ? 1 : 0;
-      pc2.ssaoEnabled = 0;
-      pc2.ssaoDebugView = 0;
-      pc2.ssaoCompositeStrength = 0.0f;
+      pc2.ssaoEnabled = (ssaoEnabled && runRayQuerySSAO) ? 1 : 0;
+      pc2.ssaoDebugView = (ssaoDebugView && runRayQuerySSAO) ? 1 : 0;
+      pc2.ssaoCompositeStrength = std::clamp(ssaoCompositeStrength, 0.0f, 1.0f);
       commandBuffers[currentFrame].pushConstants<CompositePush>(*compositePipelineLayout, vk::ShaderStageFlagBits::eFragment, 0, pc2);
 
       commandBuffers[currentFrame].draw(3, 1, 0, 0);
@@ -2236,8 +2262,23 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       rqBackToGeneral.subresourceRange.levelCount = 1;
       rqBackToGeneral.subresourceRange.layerCount = 1;
 
-      std::array<vk::ImageMemoryBarrier2, 2> barriers{swapchainToPresent, rqBackToGeneral};
-      vk::DependencyInfo depEnd{.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size()), .pImageMemoryBarriers = barriers.data()};
+      std::array<vk::ImageMemoryBarrier2, 3> barriers{swapchainToPresent, rqBackToGeneral, vk::ImageMemoryBarrier2{}};
+      uint32_t barrierCount = 2;
+      if (runRayQuerySSAO) {
+        vk::ImageMemoryBarrier2 rqDepthBackToGeneral{};
+        rqDepthBackToGeneral.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+        rqDepthBackToGeneral.srcAccessMask = vk::AccessFlagBits2::eShaderRead;
+        rqDepthBackToGeneral.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+        rqDepthBackToGeneral.dstAccessMask = vk::AccessFlagBits2::eShaderWrite;
+        rqDepthBackToGeneral.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        rqDepthBackToGeneral.newLayout = vk::ImageLayout::eGeneral;
+        rqDepthBackToGeneral.image = *rayQueryDepthImage;
+        rqDepthBackToGeneral.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        rqDepthBackToGeneral.subresourceRange.levelCount = 1;
+        rqDepthBackToGeneral.subresourceRange.layerCount = 1;
+        barriers[barrierCount++] = rqDepthBackToGeneral;
+      }
+      vk::DependencyInfo depEnd{.imageMemoryBarrierCount = barrierCount, .pImageMemoryBarriers = barriers.data()};
       commandBuffers[currentFrame].pipelineBarrier2(depEnd);
       if (imageIndex < swapChainImageLayouts.size())
         swapChainImageLayouts[imageIndex] = swapchainToPresent.newLayout;
@@ -2386,19 +2427,6 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
           ImGui::TextDisabled("RayQuery shadows (raster) (requires ray query + AS)");
         }
 
-        ImGui::Spacing();
-        ImGui::Text("Ambient Occlusion:");
-        ImGui::Checkbox("Enable SSAO", &ssaoEnabled);
-        ImGui::Checkbox("AO Debug View", &ssaoDebugView);
-        ImGui::BeginDisabled(!ssaoEnabled && !ssaoDebugView);
-        ImGui::SliderFloat("SSAO radius", &ssaoRadius, 0.05f, 5.0f, "%.2f");
-        ImGui::SliderFloat("SSAO bias", &ssaoBias, 0.0f, 0.2f, "%.3f");
-        ImGui::SliderFloat("SSAO intensity", &ssaoIntensity, 0.0f, 4.0f, "%.2f");
-        ImGui::SliderInt("SSAO samples", &ssaoSampleCount, 4, 64);
-        ssaoSampleCount = std::clamp(ssaoSampleCount, 4, 64);
-        ImGui::Checkbox("SSAO blur", &ssaoBlurEnabled);
-        ImGui::EndDisabled();
-
         // Planar reflections controls
         ImGui::Spacing();
         /*
@@ -2458,6 +2486,22 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         ImGui::SliderFloat("Thickness Clamp (m)", &thickGlassThicknessClamp, 0.0f, 0.5f, "%.3f");
         ImGui::SliderFloat("Absorption Scale", &thickGlassAbsorptionScale, 0.0f, 4.0f, "%.2f");
       }
+
+      ImGui::Separator();
+      ImGui::Text("Ambient Occlusion:");
+      ImGui::Checkbox("Enable SSAO", &ssaoEnabled);
+      ImGui::Checkbox("AO Debug View", &ssaoDebugView);
+      ImGui::BeginDisabled(!ssaoEnabled && !ssaoDebugView);
+      ImGui::SliderFloat("SSAO radius", &ssaoRadius, 0.05f, 3.0f, "%.2f");
+      ImGui::SliderFloat("SSAO bias", &ssaoBias, 0.0f, 0.15f, "%.3f");
+      ImGui::SliderFloat("SSAO intensity", &ssaoIntensity, 0.0f, 1.0f, "%.2f");
+      ImGui::SliderInt("SSAO samples", &ssaoSampleCount, 4, 64);
+      ssaoSampleCount = std::clamp(ssaoSampleCount, 4, 64);
+      ImGui::Checkbox("SSAO blur", &ssaoBlurEnabled);
+      ImGui::EndDisabled();
+      ImGui::BeginDisabled(!ssaoEnabled);
+      ImGui::SliderFloat("SSAO strength", &ssaoCompositeStrength, 0.0f, 1.0f, "%.2f");
+      ImGui::EndDisabled();
 
       // === LIGHT GROUP CONTROLS ===
       ImGui::Separator();
@@ -2871,6 +2915,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       vk::DependencyInfo depDepthToSSAO{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &depthToSSAOSample};
       commandBuffers[currentFrame].pipelineBarrier2(depDepthToSSAO);
 
+      updateSSAODepthInputForFrame(currentFrame, *depthImageView, vk::ImageLayout::eDepthStencilReadOnlyOptimal);
       dispatchSSAO(commandBuffers[currentFrame]);
     }
     // PASS 1b: PRESENT – composite path
@@ -2956,7 +3001,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       pc.outputIsSRGB = (swapChainImageFormat == vk::Format::eR8G8B8A8Srgb || swapChainImageFormat == vk::Format::eB8G8R8A8Srgb) ? 1 : 0;
       pc.ssaoEnabled = ssaoEnabled ? 1 : 0;
       pc.ssaoDebugView = ssaoDebugView ? 1 : 0;
-      pc.ssaoCompositeStrength = std::clamp(ssaoIntensity, 0.0f, 4.0f) > 0.0f ? 1.0f : 0.0f;
+      pc.ssaoCompositeStrength = std::clamp(ssaoCompositeStrength, 0.0f, 1.0f);
 
       commandBuffers[currentFrame].pushConstants<CompositePush>(*compositePipelineLayout, vk::ShaderStageFlagBits::eFragment, 0, pc);
 

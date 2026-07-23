@@ -65,7 +65,8 @@ struct Push {
     if (pushConsts.ssaoDebugView != 0) {
         color = float3(ao, ao, ao);
     } else if (pushConsts.ssaoEnabled != 0) {
-        float aoMix = lerp(1.0, ao, saturate(pushConsts.ssaoCompositeStrength));
+        float safeAO = max(ao, 0.50);
+        float aoMix = lerp(1.0, safeAO, saturate(pushConsts.ssaoCompositeStrength));
         color *= aoMix;
     }
 

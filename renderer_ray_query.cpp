@@ -1576,6 +1576,7 @@ bool Renderer::updateRayQueryDescriptorSets(uint32_t frameIndex, const std::vect
     vk::DescriptorBufferInfo uboInfo{};
     vk::WriteDescriptorSetAccelerationStructureKHR tlasInfo{};
     vk::DescriptorImageInfo imageInfo{};
+    vk::DescriptorImageInfo depthImageInfo{};
     vk::DescriptorBufferInfo lightInfo{};
     vk::DescriptorBufferInfo geoInfo{};
     vk::DescriptorBufferInfo matInfo{};
@@ -1627,6 +1628,22 @@ bool Renderer::updateRayQueryDescriptorSets(uint32_t frameIndex, const std::vect
     imageWrite.descriptorType = vk::DescriptorType::eStorageImage;
     imageWrite.pImageInfo = &imageInfo;
     writes.push_back(imageWrite);
+
+    if (!*rayQueryDepthImageView) {
+      std::cerr << "Ray query depth image not initialized\n";
+      return false;
+    }
+    depthImageInfo.imageView = *rayQueryDepthImageView;
+    depthImageInfo.imageLayout = vk::ImageLayout::eGeneral;
+
+    vk::WriteDescriptorSet depthImageWrite{};
+    depthImageWrite.dstSet = *rayQueryDescriptorSets[frameIndex];
+    depthImageWrite.dstBinding = 7;
+    depthImageWrite.dstArrayElement = 0;
+    depthImageWrite.descriptorCount = 1;
+    depthImageWrite.descriptorType = vk::DescriptorType::eStorageImage;
+    depthImageWrite.pImageInfo = &depthImageInfo;
+    writes.push_back(depthImageWrite);
 
     // Binding 3: Light buffer
     lightInfo.buffer = *lightStorageBuffers[frameIndex].buffer;

@@ -1372,6 +1372,10 @@ class Renderer {
     vk::raii::Image rayQueryOutputImage = nullptr;
     std::unique_ptr<MemoryPool::Allocation> rayQueryOutputImageAllocation = nullptr;
     vk::raii::ImageView rayQueryOutputImageView = nullptr;
+    vk::Format rayQueryDepthFormat = vk::Format::eR32Sfloat;
+    vk::raii::Image rayQueryDepthImage = nullptr;
+    std::unique_ptr<MemoryPool::Allocation> rayQueryDepthImageAllocation = nullptr;
+    vk::raii::ImageView rayQueryDepthImageView = nullptr;
 
     // Acceleration structures for ray query
     struct AccelerationStructure {
@@ -1911,9 +1915,10 @@ class Renderer {
     bool ssaoEnabled = false;
     bool ssaoDebugView = false;
     bool ssaoBlurEnabled = true;
-    float ssaoRadius = 0.65f;
-    float ssaoBias = 0.025f;
-    float ssaoIntensity = 1.4f;
+    float ssaoRadius = 0.45f;
+    float ssaoBias = 0.035f;
+    float ssaoIntensity = 0.75f;
+    float ssaoCompositeStrength = 0.55f;
     int ssaoSampleCount = 16;
 
     // --- Planar reflections (scaffolding) ---
@@ -2041,6 +2046,7 @@ class Renderer {
     void destroySSAOResources();
     void createSSAODescriptorSets();
     void createCompositeDescriptorSets();
+    void updateSSAODepthInputForFrame(uint32_t frameIndex, vk::ImageView depthView, vk::ImageLayout depthLayout);
     void updateSSAOUniformBuffer(uint32_t frameIndex, CameraComponent *camera);
     void dispatchSSAO(vk::raii::CommandBuffer& cmd);
     bool createMeshResources(MeshComponent* meshComponent, bool deferUpload = false);

@@ -72,6 +72,7 @@ struct RayQueryUniforms {
 // Must match Renderer::RQ_MAX_TEX in C++ (currently 2048)
 static const uint RQ_MAX_TEX = 2048;
 [[vk::binding(6, 0)]] Sampler2D baseColorTex[RQ_MAX_TEX];
+[[vk::binding(7, 0)]] RWTexture2D<float> outputDepth;        // Vulkan NDC depth for SSAO
 
 // (No debug buffer in production layout)
 
@@ -1072,9 +1073,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 c = shadeWithSecondaryRays(rayOrigin, rayDir, hit, rngState);
         // Output linear HDR-ish color; composite pass will apply exposure/gamma.
         outputImage[pixelCoord] = float4(c, 1.0);
+        float4 viewPos = mul(ubo.view, float4(hit.worldPos, 1.0));
+        float4 clipPos = mul(ubo.proj, viewPos);
+        outputDepth[pixelCoord] = saturate(clipPos.z / max(abs(clipPos.w), 1e-6));
 
     } else {
         // Sky/background color
         outputImage[pixelCoord] = float4(skyColor(rayDir), 1.0);
+        outputDepth[pixelCoord] = 1.0;
     }
 }
