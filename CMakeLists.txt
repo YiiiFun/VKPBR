@@ -168,6 +168,7 @@ set(SOURCES
     renderer_utils.cpp
     renderer_resources.cpp
     renderer_ray_query.cpp
+    renderer_ibl.cpp
     memory_pool.cpp
     resource_manager.cpp
     entity.cpp

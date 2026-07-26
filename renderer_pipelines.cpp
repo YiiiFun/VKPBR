@@ -204,6 +204,20 @@ bool Renderer::createPBRDescriptorSetLayout() {
       });
     }
 
+    // Bindings 14/15/16: IBL maps (irradiance cube, prefiltered specular cube, BRDF LUT).
+    // Always present in the layout; descriptors bind either the generated IBL maps or
+    // a 1x1 fallback cube / default 2D texture. The shader selects IBL vs fallback
+    // ambient via the dedicated ubo.iblEnabled int field.
+    for (uint32_t b = 14; b <= 16; ++b) {
+      bindings.push_back(vk::DescriptorSetLayoutBinding{
+        .binding = b,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        .pImmutableSamplers = nullptr
+      });
+    }
+
     // Create a descriptor set layout
     // Descriptor indexing: set per-binding flags for UPDATE_AFTER_BIND on UBO (0) and sampled images (1..5)
     vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
@@ -1269,8 +1283,9 @@ void Renderer::pushMaterialProperties(vk::CommandBuffer commandBuffer, const Mat
 }
 
 bool Renderer::createRayQueryDescriptorSetLayout() {
-  // Production layout: bindings 0..6 for ray query shading, binding 7 for SSAO depth output.
-  std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
+  // Production layout: bindings 0..6 for ray query shading, binding 7 for SSAO depth output,
+  // bindings 8/9/10 for IBL (irradiance cube, prefiltered specular cube, BRDF LUT).
+  std::array<vk::DescriptorSetLayoutBinding, 11> bindings{};
 
   // Binding 0: UBO (UniformBufferObject)
   bindings[0].binding = 0;
@@ -1320,11 +1335,20 @@ bool Renderer::createRayQueryDescriptorSetLayout() {
   bindings[7].descriptorCount = 1;
   bindings[7].stageFlags = vk::ShaderStageFlagBits::eCompute;
 
+  // Bindings 8/9/10: IBL maps. Bound to generated maps or 1x1 fallback cube / default 2D;
+  // the shader selects IBL vs fallback ambient via the dedicated ubo.iblEnabled int field.
+  for (uint32_t b = 8; b <= 10; ++b) {
+    bindings[b].binding = b;
+    bindings[b].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    bindings[b].descriptorCount = 1;
+    bindings[b].stageFlags = vk::ShaderStageFlagBits::eCompute;
+  }
+
   // Descriptor indexing / update-after-bind support:
   // The ray query shader indexes a large `eCombinedImageSampler` array with a per-pixel varying index.
   // On some drivers this requires descriptor indexing features + layout binding flags to avoid the
   // array collapsing to slot 0 (resulting in "no textures" even when `texIndex>0`).
-  std::array<vk::DescriptorBindingFlags, 8> bindingFlags{};
+  std::array<vk::DescriptorBindingFlags, 11> bindingFlags{};
   bool useUpdateAfterBind = false;
   if (descriptorIndexingEnabled) {
     if (descriptorBindingSampledImageUpdateAfterBindEnabled) {

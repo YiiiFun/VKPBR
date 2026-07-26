@@ -1577,6 +1577,9 @@ bool Renderer::updateRayQueryDescriptorSets(uint32_t frameIndex, const std::vect
     vk::WriteDescriptorSetAccelerationStructureKHR tlasInfo{};
     vk::DescriptorImageInfo imageInfo{};
     vk::DescriptorImageInfo depthImageInfo{};
+    vk::DescriptorImageInfo iblIrrInfo{};
+    vk::DescriptorImageInfo iblPrefInfo{};
+    vk::DescriptorImageInfo iblLutInfo{};
     vk::DescriptorBufferInfo lightInfo{};
     vk::DescriptorBufferInfo geoInfo{};
     vk::DescriptorBufferInfo matInfo{};
@@ -1644,6 +1647,32 @@ bool Renderer::updateRayQueryDescriptorSets(uint32_t frameIndex, const std::vect
     depthImageWrite.descriptorType = vk::DescriptorType::eStorageImage;
     depthImageWrite.pImageInfo = &depthImageInfo;
     writes.push_back(depthImageWrite);
+
+    // Bindings 8/9/10: IBL maps (generated when iblInitialized, else 1x1 fallback cube / default 2D).
+    // Always written so the set is fully defined even without IBL; the shader branches on
+    // the dedicated ubo.iblEnabled int field and never samples these when IBL is off.
+    {
+      const vk::Sampler iblSamplerHandle = (!!*iblSampler) ? *iblSampler : *defaultTextureResources.textureSampler;
+      const vk::ImageView iblIrrView = (iblInitialized && !!*iblIrradianceCubeView)
+        ? *iblIrradianceCubeView : ((!!*iblFallbackCubeView) ? *iblFallbackCubeView : *defaultTextureResources.textureImageView);
+      const vk::ImageView iblPrefView = (iblInitialized && !!*iblPrefilterCubeView)
+        ? *iblPrefilterCubeView : ((!!*iblFallbackCubeView) ? *iblFallbackCubeView : *defaultTextureResources.textureImageView);
+      const vk::ImageView iblLutView = (iblInitialized && !!*iblBrdfLutView)
+        ? *iblBrdfLutView : *defaultTextureResources.textureImageView;
+      iblIrrInfo = vk::DescriptorImageInfo{.sampler = iblSamplerHandle, .imageView = iblIrrView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+      iblPrefInfo = vk::DescriptorImageInfo{.sampler = iblSamplerHandle, .imageView = iblPrefView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+      iblLutInfo = vk::DescriptorImageInfo{.sampler = iblSamplerHandle, .imageView = iblLutView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+      for (uint32_t b = 8; b <= 10; ++b) {
+        vk::WriteDescriptorSet iblWrite{};
+        iblWrite.dstSet = *rayQueryDescriptorSets[frameIndex];
+        iblWrite.dstBinding = b;
+        iblWrite.dstArrayElement = 0;
+        iblWrite.descriptorCount = 1;
+        iblWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        iblWrite.pImageInfo = (b == 8) ? &iblIrrInfo : (b == 9) ? &iblPrefInfo : &iblLutInfo;
+        writes.push_back(iblWrite);
+      }
+    }
 
     // Binding 3: Light buffer
     lightInfo.buffer = *lightStorageBuffers[frameIndex].buffer;

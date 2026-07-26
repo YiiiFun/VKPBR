@@ -1323,7 +1323,8 @@ bool Renderer::createDescriptorPool() {
       },
       vk::DescriptorPoolSize{
         .type = vk::DescriptorType::eCombinedImageSampler,
-        .descriptorCount = textureDescriptors + rqTexDescriptors + MAX_FRAMES_IN_FLIGHT
+        // +8/frame spare: reflection sampler + Ray Query IBL bindings 8/9/10 + margin
+        .descriptorCount = textureDescriptors + rqTexDescriptors + MAX_FRAMES_IN_FLIGHT * 8u
       },
       vk::DescriptorPoolSize{
         .type = vk::DescriptorType::eStorageBuffer,
@@ -1423,6 +1424,9 @@ bool Renderer::createDescriptorSets(Entity* entity, EntityResources& res, const 
         std::array<vk::DescriptorImageInfo, 5> imageInfos;
         // Keep additional descriptor infos alive until updateDescriptorSets completes.
         vk::DescriptorImageInfo reflInfo;
+        vk::DescriptorImageInfo iblIrrInfo;
+        vk::DescriptorImageInfo iblPrefInfo;
+        vk::DescriptorImageInfo iblLutInfo;
         vk::WriteDescriptorSetAccelerationStructureKHR tlasInfo{};
         vk::AccelerationStructureKHR tlasHandleValue{};
         vk::DescriptorBufferInfo lightBufferInfo;
@@ -1519,6 +1523,25 @@ bool Renderer::createDescriptorSets(Entity* entity, EntityResources& res, const 
           .descriptorType = vk::DescriptorType::eCombinedImageSampler,
           .pImageInfo = &reflInfo
         });
+
+        // Bindings 14/15/16: IBL maps. Bind the generated IBL textures when available,
+        // otherwise the 1x1 fallback cube / default 2D texture so descriptors always
+        // hold type-correct views (cube views for SamplerCube bindings).
+        {
+          const vk::Sampler iblSamplerHandle = (!!*iblSampler) ? *iblSampler : *defaultTextureResources.textureSampler;
+          const vk::ImageView iblIrrView = (iblInitialized && !!*iblIrradianceCubeView)
+            ? *iblIrradianceCubeView : ((!!*iblFallbackCubeView) ? *iblFallbackCubeView : *defaultTextureResources.textureImageView);
+          const vk::ImageView iblPrefView = (iblInitialized && !!*iblPrefilterCubeView)
+            ? *iblPrefilterCubeView : ((!!*iblFallbackCubeView) ? *iblFallbackCubeView : *defaultTextureResources.textureImageView);
+          const vk::ImageView iblLutView = (iblInitialized && !!*iblBrdfLutView)
+            ? *iblBrdfLutView : *defaultTextureResources.textureImageView;
+          iblIrrInfo = vk::DescriptorImageInfo{.sampler = iblSamplerHandle, .imageView = iblIrrView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+          iblPrefInfo = vk::DescriptorImageInfo{.sampler = iblSamplerHandle, .imageView = iblPrefView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+          iblLutInfo = vk::DescriptorImageInfo{.sampler = iblSamplerHandle, .imageView = iblLutView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+          descriptorWrites.push_back({.dstSet = *targetDescriptorSets[i], .dstBinding = 14, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &iblIrrInfo});
+          descriptorWrites.push_back({.dstSet = *targetDescriptorSets[i], .dstBinding = 15, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &iblPrefInfo});
+          descriptorWrites.push_back({.dstSet = *targetDescriptorSets[i], .dstBinding = 16, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &iblLutInfo});
+        }
 
         // Binding 11: TLAS (ray-query shadows in raster fragment shader)
         // The PBR pipeline layout always declares this binding; it must be written before any draw.
@@ -2699,7 +2722,9 @@ std::pair<vk::raii::Image, std::unique_ptr<MemoryPool::Allocation>> Renderer::cr
   vk::MemoryPropertyFlags properties,
   uint32_t mipLevels,
   vk::SharingMode sharingMode,
-  const std::vector<uint32_t>& queueFamilies) {
+  const std::vector<uint32_t>& queueFamilies,
+  uint32_t arrayLayers,
+  vk::ImageCreateFlags createFlags) {
   try {
     if (!memoryPool) {
       throw std::runtime_error("Memory pool not initialized");
@@ -2714,7 +2739,9 @@ std::pair<vk::raii::Image, std::unique_ptr<MemoryPool::Allocation>> Renderer::cr
                                                        properties,
                                                        mipLevels,
                                                        sharingMode,
-                                                       queueFamilies);
+                                                       queueFamilies,
+                                                       arrayLayers,
+                                                       createFlags);
 
     return {std::move(image), std::move(allocation)};
   } catch (const std::exception& e) {
@@ -2724,20 +2751,20 @@ std::pair<vk::raii::Image, std::unique_ptr<MemoryPool::Allocation>> Renderer::cr
 }
 
 // Create an image view
-vk::raii::ImageView Renderer::createImageView(vk::raii::Image& image, vk::Format format, vk::ImageAspectFlags aspectFlags, uint32_t mipLevels) {
+vk::raii::ImageView Renderer::createImageView(vk::raii::Image& image, vk::Format format, vk::ImageAspectFlags aspectFlags, uint32_t mipLevels, vk::ImageViewType viewType, uint32_t baseMipLevel, uint32_t layerCount) {
   try {
     ensureThreadLocalVulkanInit();
     // Create image view
     vk::ImageViewCreateInfo viewInfo{
       .image = *image,
-      .viewType = vk::ImageViewType::e2D,
+      .viewType = viewType,
       .format = format,
       .subresourceRange = {
         .aspectMask = aspectFlags,
-        .baseMipLevel = 0,
+        .baseMipLevel = baseMipLevel,
         .levelCount = mipLevels,
         .baseArrayLayer = 0,
-        .layerCount = 1
+        .layerCount = layerCount
       }
     };
 
@@ -3926,6 +3953,9 @@ bool Renderer::updateDescriptorSetsForFrame(Entity* entity,
     vk::DescriptorBufferInfo geoInfoInfo{};
     vk::DescriptorBufferInfo matInfoInfo{};
     vk::DescriptorImageInfo reflInfo{};
+    vk::DescriptorImageInfo iblIrrInfo{};
+    vk::DescriptorImageInfo iblPrefInfo{};
+    vk::DescriptorImageInfo iblLutInfo{};
     vk::AccelerationStructureKHR tlasHandleValue{};
     vk::WriteDescriptorSetAccelerationStructureKHR tlasInfo{};
     vk::WriteDescriptorSet tlasWrite{};
@@ -3983,6 +4013,23 @@ bool Renderer::updateDescriptorSetsForFrame(Entity* entity,
         .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
       };
       dstWrites.push_back({.dstSet = *targetDescriptorSets[frameIndex], .dstBinding = 10, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &reflInfo});
+
+      // Bindings 14/15/16: IBL maps (generated when iblInitialized, else fallback cube/2D).
+      {
+        const vk::Sampler iblSamplerHandle = (!!*iblSampler) ? *iblSampler : *defaultTextureResources.textureSampler;
+        const vk::ImageView iblIrrView = (iblInitialized && !!*iblIrradianceCubeView)
+          ? *iblIrradianceCubeView : ((!!*iblFallbackCubeView) ? *iblFallbackCubeView : *defaultTextureResources.textureImageView);
+        const vk::ImageView iblPrefView = (iblInitialized && !!*iblPrefilterCubeView)
+          ? *iblPrefilterCubeView : ((!!*iblFallbackCubeView) ? *iblFallbackCubeView : *defaultTextureResources.textureImageView);
+        const vk::ImageView iblLutView = (iblInitialized && !!*iblBrdfLutView)
+          ? *iblBrdfLutView : *defaultTextureResources.textureImageView;
+        iblIrrInfo = vk::DescriptorImageInfo{.sampler = iblSamplerHandle, .imageView = iblIrrView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+        iblPrefInfo = vk::DescriptorImageInfo{.sampler = iblSamplerHandle, .imageView = iblPrefView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+        iblLutInfo = vk::DescriptorImageInfo{.sampler = iblSamplerHandle, .imageView = iblLutView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+        dstWrites.push_back({.dstSet = *targetDescriptorSets[frameIndex], .dstBinding = 14, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &iblIrrInfo});
+        dstWrites.push_back({.dstSet = *targetDescriptorSets[frameIndex], .dstBinding = 15, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &iblPrefInfo});
+        dstWrites.push_back({.dstSet = *targetDescriptorSets[frameIndex], .dstBinding = 16, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &iblLutInfo});
+      }
 
       // Binding 11: TLAS (ray-query shadows in raster PBR fragment shader)
       if (accelerationStructureEnabled) {

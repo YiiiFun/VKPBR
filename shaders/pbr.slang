@@ -50,7 +50,37 @@ struct VSOutput {
 // Bindings 6, 7, 8 (SSBOs) REMOVED
 [[vk::binding(10, 0)]] Sampler2D reflectionMap;
 
+// IBL maps (bindings 14/15/16). Bound to generated maps when ubo.iblEnabled != 0,
+// otherwise a 1x1 fallback cube / default 2D texture (never sampled in that case).
+[[vk::binding(14, 0)]] SamplerCube irradianceMap;
+[[vk::binding(15, 0)]] SamplerCube prefilterMap;
+[[vk::binding(16, 0)]] Sampler2D brdfLUT;
+static const float IBL_MAX_LOD = 4.0; // IBL_PREFILTER_MIPS - 1
+
 [[vk::push_constant]] PushConstants material;
+
+// Split-sum image-based lighting: diffuse irradiance + prefiltered GGX specular * BRDF LUT.
+float3 computeIBLAmbient(float3 N, float3 V, float3 albedo, float metallic, float roughness)
+{
+    float NdotV = max(dot(N, V), 0.0);
+    float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
+    float3 F = FresnelSchlick(NdotV, F0);
+
+    float3 irradiance = irradianceMap.SampleLevel(N, 0.0).rgb;
+    if (ubo.iblDebugView != 0) {
+        return irradiance * ubo.iblIntensity;
+    }
+
+    float3 kD = (1.0 - F) * (1.0 - metallic);
+    float3 iblDiffuse = irradiance * albedo * kD;
+
+    float3 R = reflect(-V, N);
+    float3 prefilteredColor = prefilterMap.SampleLevel(R, clamp(roughness, 0.0, 1.0) * IBL_MAX_LOD).rgb;
+    float2 brdf = brdfLUT.SampleLevel(float2(NdotV, clamp(roughness, 0.0, 1.0)), 0.0).rg;
+    float3 iblSpecular = prefilteredColor * (F * brdf.x + brdf.y);
+
+    return (iblDiffuse + iblSpecular) * ubo.iblIntensity;
+}
 
 [[shader("vertex")]]
 VSOutput VSMain(VSInput input)
@@ -90,7 +120,11 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float3 L = normalize(float3(1.0, 1.0, 1.0));
 
     float NdotL = max(dot(N, L), 0.0);
-    float3 ambient = albedo * 0.1 * ubo.scaleIBLAmbient;
+    // IBL replaces the constant ambient term when enabled (dedicated int toggle,
+    // independent of scaleIBLAmbient). Uses un-attenuated baseColor as albedo.
+    float3 ambient = (ubo.iblEnabled != 0)
+        ? computeIBLAmbient(N, V, baseColor.rgb, metallic, roughness)
+        : albedo * 0.1 * ubo.scaleIBLAmbient;
     float3 diffuse = albedo * NdotL;
 
     return float4(diffuse + ambient, baseColor.a);

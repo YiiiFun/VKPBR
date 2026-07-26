@@ -446,14 +446,17 @@ std::pair<vk::raii::Image, std::unique_ptr<MemoryPool::Allocation>> MemoryPool::
   vk::MemoryPropertyFlags properties,
   uint32_t mipLevels,
   vk::SharingMode sharingMode,
-  const std::vector<uint32_t>& queueFamilyIndices) {
+  const std::vector<uint32_t>& queueFamilyIndices,
+  uint32_t arrayLayers,
+  vk::ImageCreateFlags createFlags) {
   // Create the image
   vk::ImageCreateInfo imageInfo{
+    .flags = createFlags,
     .imageType = vk::ImageType::e2D,
     .format = format,
     .extent = {width, height, 1},
     .mipLevels = std::max(1u, mipLevels),
-    .arrayLayers = 1,
+    .arrayLayers = std::max(1u, arrayLayers),
     .samples = vk::SampleCountFlagBits::e1,
     .tiling = tiling,
     .usage = usage,

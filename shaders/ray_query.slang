@@ -58,7 +58,10 @@ struct RayQueryUniforms {
     [[vk::offset(272)]] float shadowSoftness;     // 0 = hard; otherwise scales effective light radius (see shader)
     [[vk::offset(276)]] float reflectionIntensity; // user control
     [[vk::offset(280)]] int shadowedLocalLightLimit; // max local lights that cast shadows per pixel
-    [[vk::offset(284)]] float _padShadow2;
+    // IBL controls (dedicated fields — never overload scaleIBLAmbient for this)
+    [[vk::offset(284)]] int iblEnabled;     // 1 = sample IBL maps, 0 = constant ambient fallback
+    [[vk::offset(288)]] float iblIntensity; // scales IBL contribution
+    [[vk::offset(292)]] int iblDebugView;   // 1 = visualize irradiance map only
 };
 
 // Compute shader descriptor bindings
@@ -73,6 +76,38 @@ struct RayQueryUniforms {
 static const uint RQ_MAX_TEX = 2048;
 [[vk::binding(6, 0)]] Sampler2D baseColorTex[RQ_MAX_TEX];
 [[vk::binding(7, 0)]] RWTexture2D<float> outputDepth;        // Vulkan NDC depth for SSAO
+
+// IBL maps (bindings 8/9/10). Bound to generated maps when ubo.iblEnabled != 0,
+// otherwise a 1x1 fallback cube / default 2D texture (never sampled in that case).
+// NOTE: compute shaders have no implicit derivatives — always SampleLevel, never Sample.
+[[vk::binding(8, 0)]] SamplerCube irradianceMap;
+[[vk::binding(9, 0)]] SamplerCube prefilterMap;
+[[vk::binding(10, 0)]] Sampler2D brdfLUT;
+static const float IBL_MAX_LOD = 4.0; // IBL_PREFILTER_MIPS - 1
+
+// Split-sum image-based lighting (compute-safe: explicit LOD everywhere).
+float3 computeIBLAmbientRQ(float3 N, float3 V, float3 albedo, float metallic, float roughness)
+{
+    float NdotV = max(dot(N, V), 0.0);
+    float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
+    float3 F = FresnelSchlick(NdotV, F0);
+
+    float3 irradiance = irradianceMap.SampleLevel(N, 0.0).rgb;
+    if (ubo.iblDebugView != 0) {
+        return irradiance * ubo.iblIntensity;
+    }
+
+    float3 kD = (1.0 - F) * (1.0 - metallic);
+    float3 iblDiffuse = irradiance * albedo * kD;
+
+    float3 R = reflect(-V, N);
+    float r = clamp(roughness, 0.0, 1.0);
+    float3 prefilteredColor = prefilterMap.SampleLevel(R, r * IBL_MAX_LOD).rgb;
+    float2 brdf = brdfLUT.SampleLevel(float2(NdotV, r), 0.0).rg;
+    float3 iblSpecular = prefilteredColor * (F * brdf.x + brdf.y);
+
+    return (iblDiffuse + iblSpecular) * ubo.iblIntensity;
+}
 
 // (No debug buffer in production layout)
 
@@ -1008,7 +1043,16 @@ HitInfo traceRay(float3 origin, float3 direction, float tMin, float tMax, inout 
         // Avoid ambient "fill" on true glass/transmission; it can make them look opaque/frosted.
         // BUT keep ambient for alpha-BLEND decals/foliage so they don't become unnaturally dark overlays.
         bool treatAsTransmissive = (material.isGlass != 0) || (material.transmissionFactor > 0.01);
-        float3 ambient = treatAsTransmissive ? float3(0.0, 0.0, 0.0) : (albedo * (0.1 * ubo.scaleIBLAmbient) * ao);
+        // IBL replaces the constant ambient term when enabled (dedicated int toggle in the
+        // UBO — never inferred from intensity, so "off" can never leak into the IBL branch).
+        float3 ambient;
+        if (treatAsTransmissive) {
+            ambient = float3(0.0, 0.0, 0.0);
+        } else if (ubo.iblEnabled != 0) {
+            ambient = computeIBLAmbientRQ(N, V, albedo, metallic, roughness) * ao;
+        } else {
+            ambient = albedo * (0.1 * ubo.scaleIBLAmbient) * ao;
+        }
         float3 color = ambient + diffuseLighting + specularLighting + emissive;
 
         result.color = color;

@@ -437,6 +437,35 @@ bool Renderer::Initialize(const std::string& appName, bool enableValidationLayer
 
   std::cout << "[Watchdog] Started - will abort if no frame updates for 10+ seconds (60s during loading)\n";
 
+  // Generate IBL maps (HDR equirect -> env/irradiance/prefilter cubemaps + BRDF LUT).
+  // Non-fatal: on failure the renderer keeps the constant-ambient fallback path and
+  // descriptors bind a 1x1 fallback cube. Runs before scene load, so entity
+  // descriptors pick up the real IBL views at their cold-init when this succeeds.
+  if (!loadAndGenerateIBL()) {
+    std::cerr << "IBL initialization failed; continuing without image-based lighting\n";
+  }
+
+  // Test hook: force the initial render mode via environment variable
+  // (e.g. VKPBR_START_MODE=rayquery) so automated smoke tests can exercise
+  // the Ray Query path without UI interaction.
+  if (const char* modeEnv = std::getenv("VKPBR_START_MODE")) {
+    if (std::strcmp(modeEnv, "rayquery") == 0 || std::strcmp(modeEnv, "rq") == 0) {
+      currentRenderMode = RenderMode::RayQuery;
+      std::cout << "VKPBR_START_MODE: starting in Ray Query mode\n";
+      RequestAccelerationStructureBuild();
+    }
+  }
+  // Test hook: force IBL toggle state (off / debug) for automated smoke tests.
+  if (const char* iblEnv = std::getenv("VKPBR_START_IBL")) {
+    if (std::strcmp(iblEnv, "off") == 0) {
+      iblEnabled = false;
+      std::cout << "VKPBR_START_IBL: IBL disabled at startup\n";
+    } else if (std::strcmp(iblEnv, "debug") == 0) {
+      iblDebugView = true;
+      std::cout << "VKPBR_START_IBL: debug view enabled at startup\n";
+    }
+  }
+
   initialized = true;
   return true;
 }

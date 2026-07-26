@@ -911,6 +911,10 @@ void Renderer::prepareFrameUboTemplate(CameraComponent* camera, ImGuiSystem* img
   // Preserve the original raster lighting baseline. Day/Night sky ambient is
   // a Ray Query control and must not alter rasterization output.
   frameUboTemplate.scaleIBLAmbient = 0.0f;
+  // IBL controls: dedicated fields, independent of scaleIBLAmbient.
+  frameUboTemplate.iblEnabled = (iblInitialized && iblEnabled) ? 1 : 0;
+  frameUboTemplate.iblDebugView = iblDebugView ? 1 : 0;
+  frameUboTemplate.iblIntensity = std::clamp(iblIntensity, 0.0f, 8.0f);
   frameUboTemplate.screenDimensions = glm::vec2(swapChainExtent.width, swapChainExtent.height);
   frameUboTemplate.nearZ = camera->GetNearPlane();
   frameUboTemplate.farZ = camera->GetFarPlane();
@@ -2106,6 +2110,10 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         // Match raster convention: ambient scale factor for simple IBL/ambient term.
         // (Raster defaults to ~1.0 in the main pass; keep Ray Query consistent.)
         ubo.scaleIBLAmbient = skyAmbientScale;
+        // IBL controls: dedicated fields, independent of scaleIBLAmbient.
+        ubo.iblEnabled = (iblInitialized && iblEnabled) ? 1 : 0;
+        ubo.iblIntensity = std::clamp(iblIntensity, 0.0f, 8.0f);
+        ubo.iblDebugView = iblDebugView ? 1 : 0;
         // Provide the per-frame light count so the ray query shader can iterate lights.
         ubo.lightCount = static_cast<int>(lastFrameLightCount);
         ubo.screenDimensions = glm::vec2(swapChainExtent.width, swapChainExtent.height);
@@ -2534,6 +2542,21 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       ImGui::BeginDisabled(aoMode == AOMode::Off);
       ImGui::SliderFloat("AO strength", &ssaoCompositeStrength, 0.0f, 1.0f, "%.2f");
       ImGui::EndDisabled();
+
+      // === IBL CONTROLS ===
+      ImGui::Separator();
+      if (ImGui::CollapsingHeader("IBL (image-based lighting)", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (iblInitialized) {
+          ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "IBL maps ready");
+          ImGui::Checkbox("Enable IBL", &iblEnabled);
+          ImGui::BeginDisabled(!iblEnabled);
+          ImGui::SliderFloat("IBL intensity", &iblIntensity, 0.0f, 4.0f, "%.2f");
+          ImGui::Checkbox("IBL debug view (irradiance)", &iblDebugView);
+          ImGui::EndDisabled();
+        } else {
+          ImGui::TextDisabled("IBL maps not available (HDR missing or generation failed).");
+        }
+      }
 
       // === LIGHT GROUP CONTROLS ===
       ImGui::Separator();

@@ -169,7 +169,9 @@ class MemoryPool
 	    vk::MemoryPropertyFlags      properties,
 	    uint32_t                     mipLevels          = 1,
 	    vk::SharingMode              sharingMode        = vk::SharingMode::eExclusive,
-	    const std::vector<uint32_t> &queueFamilyIndices = {});
+	    const std::vector<uint32_t> &queueFamilyIndices = {},
+	    uint32_t                     arrayLayers        = 1,
+	    vk::ImageCreateFlags         createFlags        = {});
 
 	/**
 	 * @brief Get memory usage statistics

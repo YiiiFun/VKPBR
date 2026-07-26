@@ -137,9 +137,10 @@ struct UniformBufferObject {
   alignas(16) glm::vec4 _rqReservedWorldPos{0.0f, 0.0f, 0.0f, 0.0f};
   // Ray-query specific: number of materials in materialBuffer
   alignas(4) int materialCount{0};
-  alignas(4) int _padMat0{0};
-  alignas(4) int _padMat1{0};
-  alignas(4) int _padMat2{0};
+  // IBL controls (dedicated fields — never overload scaleIBLAmbient for this)
+  alignas(4) int iblEnabled{0};     // 1 = sample IBL maps, 0 = constant ambient fallback
+  alignas(4) int iblDebugView{0};   // 1 = visualize irradiance map only
+  alignas(4) float iblIntensity{1.0f}; // scales IBL contribution
 };
 
 struct SSAOUniformBufferObject {
@@ -190,10 +191,14 @@ struct RayQueryUniformBufferObject {
   alignas(4) float shadowSoftness; // 0 = hard; otherwise scales effective light radius (fraction of range)
   alignas(4) float reflectionIntensity; // User control for glass reflection strength
   alignas(4) int shadowedLocalLightLimit; // Max local lights that cast Ray Query shadows per pixel
-  alignas(4) float _padShadow{};
+  // IBL controls (dedicated fields — never overload scaleIBLAmbient for this)
+  alignas(4) int iblEnabled{0};        // 1 = sample IBL maps, 0 = constant ambient fallback
+  alignas(4) float iblIntensity{1.0f}; // scales IBL contribution
+  alignas(4) int iblDebugView{0};      // 1 = visualize irradiance map only
+  alignas(4) int _padIbl0{0};
 };
 
-static_assert(sizeof(RayQueryUniformBufferObject) == 288, "RayQueryUniformBufferObject size must match shader layout");
+static_assert(sizeof(RayQueryUniformBufferObject) == 304, "RayQueryUniformBufferObject size must match shader layout");
 static_assert(offsetof(RayQueryUniformBufferObject, model) == 0);
 static_assert(offsetof(RayQueryUniformBufferObject, view) == 64);
 static_assert(offsetof(RayQueryUniformBufferObject, proj) == 128);
@@ -216,6 +221,9 @@ static_assert(offsetof(RayQueryUniformBufferObject, shadowSampleCount) == 268);
 static_assert(offsetof(RayQueryUniformBufferObject, shadowSoftness) == 272);
 static_assert(offsetof(RayQueryUniformBufferObject, reflectionIntensity) == 276);
 static_assert(offsetof(RayQueryUniformBufferObject, shadowedLocalLightLimit) == 280);
+static_assert(offsetof(RayQueryUniformBufferObject, iblEnabled) == 284);
+static_assert(offsetof(RayQueryUniformBufferObject, iblIntensity) == 288);
+static_assert(offsetof(RayQueryUniformBufferObject, iblDebugView) == 292);
 
 /**
  * @brief Structure for PBR material properties.
@@ -1390,6 +1398,39 @@ class Renderer {
     std::unique_ptr<MemoryPool::Allocation> rayQueryDepthImageAllocation = nullptr;
     vk::raii::ImageView rayQueryDepthImageView = nullptr;
 
+    // ---- IBL GPU resources (generated once at init by renderer_ibl.cpp) ----
+    static constexpr uint32_t IBL_ENV_CUBE_SIZE = 1024;
+    static constexpr uint32_t IBL_IRRADIANCE_SIZE = 32;
+    static constexpr uint32_t IBL_PREFILTER_SIZE = 128;
+    static constexpr uint32_t IBL_PREFILTER_MIPS = 5;
+    static constexpr uint32_t IBL_LUT_SIZE = 512;
+    vk::Format iblCubeFormat = vk::Format::eR16G16B16A16Sfloat;
+    vk::raii::Image iblEnvCubeImage = nullptr;
+    std::unique_ptr<MemoryPool::Allocation> iblEnvCubeImageAllocation = nullptr;
+    vk::raii::ImageView iblEnvCubeView = nullptr;          // eCube, sampled by compute
+    vk::raii::Image iblIrradianceImage = nullptr;
+    std::unique_ptr<MemoryPool::Allocation> iblIrradianceImageAllocation = nullptr;
+    vk::raii::ImageView iblIrradianceCubeView = nullptr;   // eCube, sampled by shaders
+    vk::raii::Image iblPrefilterImage = nullptr;
+    std::unique_ptr<MemoryPool::Allocation> iblPrefilterImageAllocation = nullptr;
+    vk::raii::ImageView iblPrefilterCubeView = nullptr;    // eCube, 5 mips
+    vk::raii::Image iblBrdfLutImage = nullptr;
+    std::unique_ptr<MemoryPool::Allocation> iblBrdfLutImageAllocation = nullptr;
+    vk::raii::ImageView iblBrdfLutView = nullptr;          // e2D
+    vk::raii::Sampler iblSampler = nullptr;                // linear + mipmaps, maxLod = IBL_PREFILTER_MIPS-1
+    // Fallback 1x1 black cubemap bound to SamplerCube slots whenever IBL is unavailable,
+    // so descriptors always have a type-correct (cube) view even before/without IBL.
+    vk::raii::Image iblFallbackCubeImage = nullptr;
+    std::unique_ptr<MemoryPool::Allocation> iblFallbackCubeImageAllocation = nullptr;
+    vk::raii::ImageView iblFallbackCubeView = nullptr;
+    // IBL compute pipelines (equirect->cube, irradiance, prefilter, BRDF LUT)
+    vk::raii::DescriptorSetLayout iblComputeDescriptorSetLayout = nullptr;
+    vk::raii::PipelineLayout iblComputePipelineLayout = nullptr;
+    vk::raii::Pipeline iblEquirectToCubemapPipeline = nullptr;
+    vk::raii::Pipeline iblIrradiancePipeline = nullptr;
+    vk::raii::Pipeline iblPrefilterPipeline = nullptr;
+    vk::raii::Pipeline iblBrdfLutPipeline = nullptr;
+
     // Acceleration structures for ray query
     struct AccelerationStructure {
       vk::raii::Buffer buffer = nullptr;
@@ -1718,6 +1759,15 @@ class Renderer {
     float stringLightIntensity = 0.5f;
     float stringLightRange = 0.75f;
     float skyAmbientScale = 1.0f;
+
+    // ---- IBL (image-based lighting) state ----
+    // iblInitialized: GPU maps generated successfully (gates UI + descriptor binding)
+    // iblEnabled:     user toggle; shader reads ubo.iblEnabled (never inferred from intensity)
+    bool iblInitialized = false;
+    bool iblEnabled = true;
+    float iblIntensity = 1.0f;
+    bool iblDebugView = false;
+    std::string iblHdrPath = "Assets/ibl/san_giuseppe_bridge_4k.hdr";
 
     // Dynamic lighting system using storage buffers
     struct LightStorageBuffer {
@@ -2156,7 +2206,7 @@ class Renderer {
     void copyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer, vk::DeviceSize size);
 
     std::pair<vk::raii::Image, vk::raii::DeviceMemory> createImage(uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties);
-    std::pair<vk::raii::Image, std::unique_ptr<MemoryPool::Allocation>> createImagePooled(uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties, uint32_t mipLevels = 1, vk::SharingMode sharingMode = vk::SharingMode::eExclusive, const std::vector<uint32_t>& queueFamilies = {});
+    std::pair<vk::raii::Image, std::unique_ptr<MemoryPool::Allocation>> createImagePooled(uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties, uint32_t mipLevels = 1, vk::SharingMode sharingMode = vk::SharingMode::eExclusive, const std::vector<uint32_t>& queueFamilies = {}, uint32_t arrayLayers = 1, vk::ImageCreateFlags createFlags = {});
     void transitionImageLayout(vk::Image image, vk::Format format, vk::ImageLayout oldLayout, vk::ImageLayout newLayout, uint32_t mipLevels = 1);
     void copyBufferToImage(vk::Buffer buffer, vk::Image image, uint32_t width, uint32_t height, vk::ArrayProxy<const vk::BufferImageCopy> regions);
     // Extended: track stagedBytes for perf stats
@@ -2167,7 +2217,19 @@ class Renderer {
                                 uint32_t mipLevels,
                                 vk::DeviceSize stagedBytes);
 
-    vk::raii::ImageView createImageView(vk::raii::Image& image, vk::Format format, vk::ImageAspectFlags aspectFlags, uint32_t mipLevels = 1);
+    vk::raii::ImageView createImageView(vk::raii::Image& image, vk::Format format, vk::ImageAspectFlags aspectFlags, uint32_t mipLevels = 1, vk::ImageViewType viewType = vk::ImageViewType::e2D, uint32_t baseMipLevel = 0, uint32_t layerCount = 1);
+
+    // ---- IBL (renderer_ibl.cpp) ----
+    // Loads the HDR equirect map, generates env/irradiance/prefilter cubemaps + BRDF LUT
+    // on the GPU, then rebinds PBR/Ray-Query descriptors. Safe to call once at init;
+    // failure leaves iblInitialized == false and the engine runs with fallback ambient.
+    bool loadAndGenerateIBL();
+    bool createIBLComputePipelines();
+    // Rebinds IBL textures (or the fallback cube) into all PBR entity sets and the
+    // Ray Query set by invalidating their fixed-binding tracking.
+    void bindIBLToPBRDescriptorSets();
+    // One-time command buffer helper for IBL setup (layerCount-aware transitions).
+    void submitIBLOneTimeCommands(const std::function<void(vk::raii::CommandBuffer&)>& recorder);
     vk::Format findSupportedFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features);
     bool hasStencilComponent(vk::Format format);
 

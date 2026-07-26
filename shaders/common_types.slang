@@ -69,9 +69,10 @@ struct UniformBufferObject {
     float4 _rqReservedWorldPos;
     // Ray-query specific: number of materials in materialBuffer (for bounds)
     int materialCount;
-    int _padMat0;
-    int _padMat1;
-    int _padMat2;
+    // IBL controls (dedicated fields — never overload scaleIBLAmbient for this)
+    int iblEnabled;     // 1 = sample IBL maps, 0 = constant ambient fallback
+    int iblDebugView;   // 1 = visualize irradiance map only
+    float iblIntensity; // scales IBL contribution
 };
 
 // Push constants for material properties
