@@ -107,7 +107,7 @@ struct UniformBufferObject {
   alignas(16) glm::vec4 camPos;
   alignas(4) float exposure;
   alignas(4) float gamma;
-  alignas(4) float prefilteredCubeMipLevels;
+  alignas(4) float iblRotation;
   alignas(4) float scaleIBLAmbient;
   alignas(4) int lightCount;
   alignas(4) int padding0; // match shader UBO layout
@@ -137,9 +137,9 @@ struct UniformBufferObject {
   alignas(16) glm::vec4 _rqReservedWorldPos{0.0f, 0.0f, 0.0f, 0.0f};
   // Ray-query specific: number of materials in materialBuffer
   alignas(4) int materialCount{0};
-  // IBL controls (dedicated fields — never overload scaleIBLAmbient for this)
+  // IBL controls
   alignas(4) int iblEnabled{0};     // 1 = sample IBL maps, 0 = constant ambient fallback
-  alignas(4) int iblDebugView{0};   // 1 = visualize irradiance map only
+  alignas(4) int iblDebugView{0};   // 0=final, 1=environment, 2=irradiance, 3=prefilter, 4=BRDF LUT
   alignas(4) float iblIntensity{1.0f}; // scales IBL contribution
 };
 
@@ -191,11 +191,11 @@ struct RayQueryUniformBufferObject {
   alignas(4) float shadowSoftness; // 0 = hard; otherwise scales effective light radius (fraction of range)
   alignas(4) float reflectionIntensity; // User control for glass reflection strength
   alignas(4) int shadowedLocalLightLimit; // Max local lights that cast Ray Query shadows per pixel
-  // IBL controls (dedicated fields — never overload scaleIBLAmbient for this)
+  // IBL controls
   alignas(4) int iblEnabled{0};        // 1 = sample IBL maps, 0 = constant ambient fallback
   alignas(4) float iblIntensity{1.0f}; // scales IBL contribution
-  alignas(4) int iblDebugView{0};      // 1 = visualize irradiance map only
-  alignas(4) int _padIbl0{0};
+  alignas(4) int iblDebugView{0};      // 0=final, 1=environment, 2=irradiance, 3=prefilter, 4=BRDF LUT
+  alignas(4) float iblRotation{0.0f};  // environment rotation around world Y, in radians
 };
 
 static_assert(sizeof(RayQueryUniformBufferObject) == 304, "RayQueryUniformBufferObject size must match shader layout");
@@ -224,6 +224,7 @@ static_assert(offsetof(RayQueryUniformBufferObject, shadowedLocalLightLimit) == 
 static_assert(offsetof(RayQueryUniformBufferObject, iblEnabled) == 284);
 static_assert(offsetof(RayQueryUniformBufferObject, iblIntensity) == 288);
 static_assert(offsetof(RayQueryUniformBufferObject, iblDebugView) == 292);
+static_assert(offsetof(RayQueryUniformBufferObject, iblRotation) == 296);
 
 /**
  * @brief Structure for PBR material properties.
@@ -1400,6 +1401,7 @@ class Renderer {
 
     // ---- IBL GPU resources (generated once at init by renderer_ibl.cpp) ----
     static constexpr uint32_t IBL_ENV_CUBE_SIZE = 1024;
+    static constexpr uint32_t IBL_ENV_CUBE_MIPS = 11;
     static constexpr uint32_t IBL_IRRADIANCE_SIZE = 32;
     static constexpr uint32_t IBL_PREFILTER_SIZE = 128;
     static constexpr uint32_t IBL_PREFILTER_MIPS = 5;
@@ -1765,8 +1767,9 @@ class Renderer {
     // iblEnabled:     user toggle; shader reads ubo.iblEnabled (never inferred from intensity)
     bool iblInitialized = false;
     bool iblEnabled = true;
-    float iblIntensity = 1.0f;
-    bool iblDebugView = false;
+    float iblIntensity = 0.5f;
+    int iblDebugView = 0;
+    float iblRotationDegrees = 0.0f;
     std::string iblHdrPath = "Assets/ibl/san_giuseppe_bridge_4k.hdr";
 
     // Dynamic lighting system using storage buffers

@@ -449,7 +449,7 @@ bool Renderer::createPBRPipeline() {
 
     // Read shader code
     LOGI("Reading PBR shader...");
-    std::string shaderPath = "shaders/pbr.spv";
+    std::string shaderPath = "shaders/pbr_full.spv";
     auto shaderCode = readFile(shaderPath);
     LOGI("PBR shader read successfully (%s), size: %zu", shaderPath.c_str(), shaderCode.size());
 
@@ -1010,7 +1010,7 @@ bool Renderer::createDepthPrepassPipeline() {
     }
 
     // Read PBR shader (vertex only)
-    auto shaderCode = readFile("shaders/pbr.spv");
+    auto shaderCode = readFile("shaders/pbr_full.spv");
     vk::raii::ShaderModule shaderModule = createShaderModule(shaderCode);
 
     // Stages: Vertex only

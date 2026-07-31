@@ -61,7 +61,8 @@ struct RayQueryUniforms {
     // IBL controls (dedicated fields — never overload scaleIBLAmbient for this)
     [[vk::offset(284)]] int iblEnabled;     // 1 = sample IBL maps, 0 = constant ambient fallback
     [[vk::offset(288)]] float iblIntensity; // scales IBL contribution
-    [[vk::offset(292)]] int iblDebugView;   // 1 = visualize irradiance map only
+    [[vk::offset(292)]] int iblDebugView;
+    [[vk::offset(296)]] float iblRotation;
 };
 
 // Compute shader descriptor bindings
@@ -85,25 +86,40 @@ static const uint RQ_MAX_TEX = 2048;
 [[vk::binding(10, 0)]] Sampler2D brdfLUT;
 static const float IBL_MAX_LOD = 4.0; // IBL_PREFILTER_MIPS - 1
 
-// Split-sum image-based lighting (compute-safe: explicit LOD everywhere).
-float3 computeIBLAmbientRQ(float3 N, float3 V, float3 albedo, float metallic, float roughness)
+float3 rotateIBLDirection(float3 direction, float angle)
 {
-    float NdotV = max(dot(N, V), 0.0);
-    float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
-    float3 F = FresnelSchlick(NdotV, F0);
+    float s = sin(angle);
+    float c = cos(angle);
+    return float3(c * direction.x - s * direction.z,
+                  direction.y,
+                  s * direction.x + c * direction.z);
+}
 
-    float3 irradiance = irradianceMap.SampleLevel(N, 0.0).rgb;
-    if (ubo.iblDebugView != 0) {
-        return irradiance * ubo.iblIntensity;
-    }
-
-    float3 kD = (1.0 - F) * (1.0 - metallic);
-    float3 iblDiffuse = irradiance * albedo * kD;
-
-    float3 R = reflect(-V, N);
+// Split-sum image-based lighting (compute-safe: explicit LOD everywhere).
+float3 computeIBLAmbientRQ(float3 N, float3 V, float3 diffuseColor, float3 F0, float roughness)
+{
     float r = clamp(roughness, 0.0, 1.0);
-    float3 prefilteredColor = prefilterMap.SampleLevel(R, r * IBL_MAX_LOD).rgb;
+    float NdotV = max(dot(N, V), 0.0);
+    float3 rotatedN = rotateIBLDirection(N, ubo.iblRotation);
+    float3 R = reflect(-V, N);
+    float3 rotatedR = rotateIBLDirection(R, ubo.iblRotation);
+
+    float3 irradiance = irradianceMap.SampleLevel(rotatedN, 0.0).rgb;
+    float3 prefilteredColor = prefilterMap.SampleLevel(rotatedR, r * IBL_MAX_LOD).rgb;
     float2 brdf = brdfLUT.SampleLevel(float2(NdotV, r), 0.0).rg;
+
+    if (ubo.iblDebugView == 1)
+        return prefilterMap.SampleLevel(rotatedR, 0.0).rgb * ubo.iblIntensity;
+    if (ubo.iblDebugView == 2)
+        return irradiance * ubo.iblIntensity;
+    if (ubo.iblDebugView == 3)
+        return prefilteredColor * ubo.iblIntensity;
+    if (ubo.iblDebugView == 4)
+        return float3(brdf, 0.0);
+
+    float3 F90 = max(float3(1.0 - r, 1.0 - r, 1.0 - r), F0);
+    float3 F = F0 + (F90 - F0) * pow(saturate(1.0 - NdotV), 5.0);
+    float3 iblDiffuse = irradiance * diffuseColor * (1.0 - F);
     float3 iblSpecular = prefilteredColor * (F * brdf.x + brdf.y);
 
     return (iblDiffuse + iblSpecular) * ubo.iblIntensity;
@@ -195,6 +211,9 @@ float computeTextureLOD(float3 worldPos, float roughness) {
 
 float3 shadeWithSecondaryRays(float3 rayOrigin, float3 rayDir, HitInfo hit, inout uint rngState) {
     float3 base = max(hit.color, 0.0);
+    if (ubo.iblEnabled != 0 && ubo.iblDebugView != 0) {
+        return base;
+    }
     int maxBounces = clamp(ubo._pad0, 0, 10);
 
     float3 N = hit.normal;
@@ -1029,7 +1048,8 @@ HitInfo traceRay(float3 origin, float3 direction, float tMin, float tMax, inout 
                 float G = GeometrySmith(NdotV, NdotL, roughness);
                 float3 F = FresnelSchlick(HdotV, F0);
                 float3 spec = (D * G * F) / max(4.0 * NdotV * NdotL, 0.0001);
-                float3 kD = (1.0 - F) * (1.0 - metallic) * (1.0 - T_diff);
+                // `albedo` already contains the non-metal diffuse fraction.
+                float3 kD = (1.0 - F) * (1.0 - T_diff);
 
                 specAcc += spec * radiance * NdotL * visibility;
                 diffAcc += (kD * albedo / PI) * radiance * NdotL * visibility;
@@ -1049,7 +1069,7 @@ HitInfo traceRay(float3 origin, float3 direction, float tMin, float tMax, inout 
         if (treatAsTransmissive) {
             ambient = float3(0.0, 0.0, 0.0);
         } else if (ubo.iblEnabled != 0) {
-            ambient = computeIBLAmbientRQ(N, V, albedo, metallic, roughness) * ao;
+            ambient = computeIBLAmbientRQ(N, V, albedo, F0, roughness) * ao;
         } else {
             ambient = albedo * (0.1 * ubo.scaleIBLAmbient) * ao;
         }

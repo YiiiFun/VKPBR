@@ -908,12 +908,13 @@ void Renderer::prepareFrameUboTemplate(CameraComponent* camera, ImGuiSystem* img
   frameUboTemplate.lightCount = static_cast<int>(lastFrameLightCount);
   frameUboTemplate.exposure = std::clamp(this->exposure, 0.2f, 4.0f);
   frameUboTemplate.gamma = this->gamma;
+  frameUboTemplate.iblRotation = glm::radians(iblRotationDegrees);
   // Preserve the original raster lighting baseline. Day/Night sky ambient is
   // a Ray Query control and must not alter rasterization output.
   frameUboTemplate.scaleIBLAmbient = 0.0f;
   // IBL controls: dedicated fields, independent of scaleIBLAmbient.
   frameUboTemplate.iblEnabled = (iblInitialized && iblEnabled) ? 1 : 0;
-  frameUboTemplate.iblDebugView = iblDebugView ? 1 : 0;
+  frameUboTemplate.iblDebugView = iblDebugView;
   frameUboTemplate.iblIntensity = std::clamp(iblIntensity, 0.0f, 8.0f);
   frameUboTemplate.screenDimensions = glm::vec2(swapChainExtent.width, swapChainExtent.height);
   frameUboTemplate.nearZ = camera->GetNearPlane();
@@ -2113,7 +2114,8 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         // IBL controls: dedicated fields, independent of scaleIBLAmbient.
         ubo.iblEnabled = (iblInitialized && iblEnabled) ? 1 : 0;
         ubo.iblIntensity = std::clamp(iblIntensity, 0.0f, 8.0f);
-        ubo.iblDebugView = iblDebugView ? 1 : 0;
+        ubo.iblDebugView = iblDebugView;
+        ubo.iblRotation = glm::radians(iblRotationDegrees);
         // Provide the per-frame light count so the ray query shader can iterate lights.
         ubo.lightCount = static_cast<int>(lastFrameLightCount);
         ubo.screenDimensions = glm::vec2(swapChainExtent.width, swapChainExtent.height);
@@ -2551,8 +2553,15 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
           ImGui::Checkbox("Enable IBL", &iblEnabled);
           ImGui::BeginDisabled(!iblEnabled);
           ImGui::SliderFloat("IBL intensity", &iblIntensity, 0.0f, 4.0f, "%.2f");
-          ImGui::Checkbox("IBL debug view (irradiance)", &iblDebugView);
+          ImGui::SliderFloat("IBL rotation", &iblRotationDegrees, -180.0f, 180.0f, "%.0f deg");
+          static const char* iblDebugModes[] = {
+            "Final lighting", "Environment", "Diffuse irradiance", "Specular prefilter", "BRDF LUT"
+          };
+          ImGui::Combo("IBL debug view", &iblDebugView, iblDebugModes, IM_ARRAYSIZE(iblDebugModes));
           ImGui::EndDisabled();
+          if (currentRenderMode == RenderMode::Rasterization && imguiSystem && !imguiSystem->IsPBREnabled()) {
+            ImGui::TextDisabled("IBL shading requires the BRDF/PBR raster pipeline.");
+          }
         } else {
           ImGui::TextDisabled("IBL maps not available (HDR missing or generation failed).");
         }

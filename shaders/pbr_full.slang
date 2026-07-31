@@ -18,7 +18,6 @@
 import common_types;
 import pbr_utils;
 import lighting_utils;
-import tonemapping_utils;
 
 // Input from vertex buffer
 struct VSInput {
@@ -69,9 +68,51 @@ struct VSOutput {
 [[vk::binding(12, 0)]] StructuredBuffer<GeometryInfo> geometryInfoBuffer;
 [[vk::binding(13, 0)]] StructuredBuffer<MaterialData> materialBuffer;
 
+[[vk::binding(14, 0)]] SamplerCube irradianceMap;
+[[vk::binding(15, 0)]] SamplerCube prefilterMap;
+[[vk::binding(16, 0)]] Sampler2D brdfLUT;
+
 [[vk::push_constant]] PushConstants material;
 
 static const float RASTER_SHADOW_EPS = 0.001;
+static const float IBL_MAX_LOD = 4.0;
+
+float3 rotateIBLDirection(float3 direction, float angle)
+{
+    float s = sin(angle);
+    float c = cos(angle);
+    return float3(c * direction.x - s * direction.z,
+                  direction.y,
+                  s * direction.x + c * direction.z);
+}
+
+float3 computeIBLAmbient(float3 N, float3 V, float3 diffuseColor, float3 F0, float roughness)
+{
+    float r = clamp(roughness, 0.0, 1.0);
+    float NdotV = max(dot(N, V), 0.0);
+    float3 rotatedN = rotateIBLDirection(N, ubo.iblRotation);
+    float3 R = reflect(-V, N);
+    float3 rotatedR = rotateIBLDirection(R, ubo.iblRotation);
+
+    float3 irradiance = irradianceMap.SampleLevel(rotatedN, 0.0).rgb;
+    float3 prefilteredColor = prefilterMap.SampleLevel(rotatedR, r * IBL_MAX_LOD).rgb;
+    float2 brdf = brdfLUT.SampleLevel(float2(NdotV, r), 0.0).rg;
+
+    if (ubo.iblDebugView == 1)
+        return prefilterMap.SampleLevel(rotatedR, 0.0).rgb * ubo.iblIntensity;
+    if (ubo.iblDebugView == 2)
+        return irradiance * ubo.iblIntensity;
+    if (ubo.iblDebugView == 3)
+        return prefilteredColor * ubo.iblIntensity;
+    if (ubo.iblDebugView == 4)
+        return float3(brdf, 0.0);
+
+    float3 F90 = max(float3(1.0 - r, 1.0 - r, 1.0 - r), F0);
+    float3 F = F0 + (F90 - F0) * pow(saturate(1.0 - NdotV), 5.0);
+    float3 iblDiffuse = irradiance * diffuseColor * (1.0 - F);
+    float3 iblSpecular = prefilteredColor * (F * brdf.x + brdf.y);
+    return (iblDiffuse + iblSpecular) * ubo.iblIntensity;
+}
 
 // Hard shadow query for raster fragment shading.
 // NOTE: We intentionally treat NON_OPAQUE candidates as non-occluding here.
@@ -303,7 +344,8 @@ float4 PSMain(VSOutput input) : SV_TARGET
                 float G      = GeometrySmith(NdotV, NdotL, roughness);
                 float3 F     = FresnelSchlick(HdotV, F0);
                 float3 spec  = (D * G * F) / max(4.0 * NdotV * NdotL, 0.0001);
-                float3 kD    = (1.0 - F) * (1.0 - metallic);
+                // `albedo` already contains the non-metal diffuse fraction.
+                float3 kD    = (1.0 - F);
                 specularLighting += spec * radiance * NdotL * visibility;
                 diffuseLighting  += (kD * albedo / PI) * radiance * NdotL * visibility;
             }
@@ -371,15 +413,20 @@ float4 PSMain(VSOutput input) : SV_TARGET
                 float G      = GeometrySmith(NdotV, NdotL, roughness);
                 float3 F     = FresnelSchlick(HdotV, F0);
                 float3 spec  = (D * G * F) / max(4.0 * NdotV * NdotL, 0.0001);
-                float3 kD    = (1.0 - F) * (1.0 - metallic);
+                // `albedo` already contains the non-metal diffuse fraction.
+                float3 kD    = (1.0 - F);
                 specularLighting += spec * radiance * NdotL * visibility;
                 diffuseLighting  += (kD * albedo / PI) * radiance * NdotL * visibility;
             }
         }
     }
 
-    float3 ambient = albedo * ao * (0.1 * ubo.scaleIBLAmbient);
-    float3 opaqueLit = diffuseLighting + specularLighting + ambient + emissive;
+    float3 ambient = (ubo.iblEnabled != 0)
+        ? computeIBLAmbient(N, V, albedo, F0, roughness) * ao
+        : albedo * ao * (0.1 * ubo.scaleIBLAmbient);
+    float3 opaqueLit = (ubo.iblEnabled != 0 && ubo.iblDebugView != 0)
+        ? ambient
+        : diffuseLighting + specularLighting + ambient + emissive;
 
     // --- 4. Final Color Assembly (opaque only; transmission handled in GlassPSMain) ---
     float3 color    = opaqueLit;
@@ -607,22 +654,7 @@ float4 GlassPSMain(VSOutput input) : SV_TARGET
         }
     }
 
-
-    // --- 3. Post-processing (same as PSMain) ---
-    color *= ubo.exposure;
-
-    // Uncharted2 / Hable filmic tonemap. Use the canonical form without
-    // the extra 1.2 pre-scale so that midtones and shadows are not
-    // over-compressed relative to highlights.
-    float3 t = Hable_Filmic_Tonemapping::Uncharted2Tonemap(color);
-    float3 w = Hable_Filmic_Tonemapping::Uncharted2Tonemap(float3(1,1,1) * Hable_Filmic_Tonemapping::W);
-    color = t / max(w, float3(1e-6, 1e-6, 1e-6));
-
-    if (ubo.padding0 == 0) {
-        color = pow(saturate(color), float3(1.0 / ubo.gamma));
-    } else {
-        color = saturate(color);
-    }
-
+    // Keep the off-screen target linear; the shared composite pass applies
+    // exposure, tone mapping, and display conversion exactly once.
     return float4(color, alphaOut);
 }

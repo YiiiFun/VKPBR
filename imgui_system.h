@@ -201,7 +201,7 @@ class ImGuiSystem {
     bool initialized = false;
 
     // PBR rendering state
-    bool pbrEnabled = false;
+    bool pbrEnabled = true;
     bool blinnPhongEnabled = false;
     bool visible = true;
 

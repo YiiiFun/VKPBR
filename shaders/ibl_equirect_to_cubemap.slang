@@ -26,12 +26,12 @@ float3 CubeDir(uint face, float2 uv)
     float3 dir = float3(0.0, 0.0, 0.0);
     switch (face)
     {
-        case 0: dir = float3( 1.0,    v, -u); break;
-        case 1: dir = float3(-1.0,    v,  u); break;
-        case 2: dir = float3(   u,  1.0, -v); break;
-        case 3: dir = float3(   u, -1.0,  v); break;
-        case 4: dir = float3(   u,    v,  1.0); break;
-        case 5: dir = float3(  -u,    v, -1.0); break;
+        case 0: dir = float3( 1.0,   -v, -u); break;
+        case 1: dir = float3(-1.0,   -v,  u); break;
+        case 2: dir = float3(   u,  1.0,  v); break;
+        case 3: dir = float3(   u, -1.0, -v); break;
+        case 4: dir = float3(   u,   -v, 1.0); break;
+        case 5: dir = float3(  -u,   -v,-1.0); break;
     }
     return normalize(dir);
 }
@@ -40,7 +40,7 @@ float3 CubeDir(uint face, float2 uv)
 float2 DirToEquirect(float3 dir)
 {
     float u = atan2(dir.z, dir.x) / (2.0 * PI) + 0.5;
-    float v = asin(clamp(dir.y, -1.0, 1.0)) / PI + 0.5;
+    float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
     return float2(u, v);
 }
 

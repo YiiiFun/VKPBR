@@ -32,7 +32,8 @@ void recordIBLImageBarrier(vk::raii::CommandBuffer& cmd,
                            vk::PipelineStageFlags2 dstStage,
                            vk::AccessFlags2 dstAccess,
                            uint32_t mipLevels,
-                           uint32_t layerCount) {
+                           uint32_t layerCount,
+                           uint32_t baseMipLevel = 0) {
   vk::ImageMemoryBarrier2 barrier{
     .srcStageMask = srcStage,
     .srcAccessMask = srcAccess,
@@ -45,7 +46,7 @@ void recordIBLImageBarrier(vk::raii::CommandBuffer& cmd,
     .image = image,
     .subresourceRange = {
       .aspectMask = vk::ImageAspectFlagBits::eColor,
-      .baseMipLevel = 0,
+      .baseMipLevel = baseMipLevel,
       .levelCount = mipLevels,
       .baseArrayLayer = 0,
       .layerCount = layerCount
@@ -178,7 +179,7 @@ bool Renderer::loadAndGenerateIBL() {
       samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
       samplerInfo.mipLodBias = 0.0f;
       samplerInfo.minLod = 0.0f;
-      samplerInfo.maxLod = static_cast<float>(IBL_PREFILTER_MIPS - 1);
+      samplerInfo.maxLod = static_cast<float>(IBL_ENV_CUBE_MIPS - 1);
       samplerInfo.anisotropyEnable = vk::False;
       iblSampler = vk::raii::Sampler(device, samplerInfo);
     }
@@ -215,11 +216,24 @@ bool Renderer::loadAndGenerateIBL() {
     const vk::DeviceSize eqSize = static_cast<vk::DeviceSize>(eqW) * static_cast<vk::DeviceSize>(eqH) * 4 * sizeof(float);
 
     // ---------- 2. Pick storage-capable formats ----------
-    const auto supportsStorage = [&](vk::Format f) {
-      return !!(physicalDevice.getFormatProperties(f).optimalTilingFeatures & vk::FormatFeatureFlagBits::eStorageImage);
+    const auto supportsIBLCube = [&](vk::Format f) {
+      const auto features = physicalDevice.getFormatProperties(f).optimalTilingFeatures;
+      const auto required = vk::FormatFeatureFlagBits::eStorageImage |
+                            vk::FormatFeatureFlagBits::eSampledImage |
+                            vk::FormatFeatureFlagBits::eSampledImageFilterLinear |
+                            vk::FormatFeatureFlagBits::eBlitSrc |
+                            vk::FormatFeatureFlagBits::eBlitDst;
+      return (features & required) == required;
     };
-    iblCubeFormat = supportsStorage(vk::Format::eR16G16B16A16Sfloat)
+    const auto supportsStorage = [&](vk::Format f) {
+      return !!(physicalDevice.getFormatProperties(f).optimalTilingFeatures &
+                vk::FormatFeatureFlagBits::eStorageImage);
+    };
+    iblCubeFormat = supportsIBLCube(vk::Format::eR16G16B16A16Sfloat)
       ? vk::Format::eR16G16B16A16Sfloat : vk::Format::eR32G32B32A32Sfloat;
+    if (!supportsIBLCube(iblCubeFormat)) {
+      throw std::runtime_error("IBL requires a storage/sample/linear-blit capable float cubemap format");
+    }
     const vk::Format lutFormat = supportsStorage(vk::Format::eR16G16Sfloat)
       ? vk::Format::eR16G16Sfloat : vk::Format::eR32G32Sfloat;
 
@@ -232,9 +246,11 @@ bool Renderer::loadAndGenerateIBL() {
     auto eqView = createImageView(eqImage, vk::Format::eR32G32B32A32Sfloat, vk::ImageAspectFlagBits::eColor);
 
     const auto cubeUsage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled;
+    const auto envCubeUsage = cubeUsage | vk::ImageUsageFlagBits::eTransferSrc |
+                              vk::ImageUsageFlagBits::eTransferDst;
     std::tie(iblEnvCubeImage, iblEnvCubeImageAllocation) = createImagePooled(
-      IBL_ENV_CUBE_SIZE, IBL_ENV_CUBE_SIZE, iblCubeFormat, vk::ImageTiling::eOptimal, cubeUsage,
-      vk::MemoryPropertyFlagBits::eDeviceLocal, 1, vk::SharingMode::eExclusive, {}, 6,
+      IBL_ENV_CUBE_SIZE, IBL_ENV_CUBE_SIZE, iblCubeFormat, vk::ImageTiling::eOptimal, envCubeUsage,
+      vk::MemoryPropertyFlagBits::eDeviceLocal, IBL_ENV_CUBE_MIPS, vk::SharingMode::eExclusive, {}, 6,
       vk::ImageCreateFlagBits::eCubeCompatible);
     std::tie(iblIrradianceImage, iblIrradianceImageAllocation) = createImagePooled(
       IBL_IRRADIANCE_SIZE, IBL_IRRADIANCE_SIZE, iblCubeFormat, vk::ImageTiling::eOptimal, cubeUsage,
@@ -253,7 +269,7 @@ bool Renderer::loadAndGenerateIBL() {
     auto envStorageView = createImageView(iblEnvCubeImage, iblCubeFormat, vk::ImageAspectFlagBits::eColor,
                                           1, vk::ImageViewType::e2DArray, 0, 6);
     iblEnvCubeView = createImageView(iblEnvCubeImage, iblCubeFormat, vk::ImageAspectFlagBits::eColor,
-                                     1, vk::ImageViewType::eCube, 0, 6);
+                                     IBL_ENV_CUBE_MIPS, vk::ImageViewType::eCube, 0, 6);
     auto irrStorageView = createImageView(iblIrradianceImage, iblCubeFormat, vk::ImageAspectFlagBits::eColor,
                                           1, vk::ImageViewType::e2DArray, 0, 6);
     iblIrradianceCubeView = createImageView(iblIrradianceImage, iblCubeFormat, vk::ImageAspectFlagBits::eColor,
@@ -359,7 +375,8 @@ bool Renderer::loadAndGenerateIBL() {
     // 8b. Targets: UNDEFINED -> GENERAL (compute storage write).
     recordIBLImageBarrier(cmd, *iblEnvCubeImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
                           vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-                          vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite, 1, 6);
+                          vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
+                          IBL_ENV_CUBE_MIPS, 6);
     recordIBLImageBarrier(cmd, *iblIrradianceImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
                           vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
                           vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite, 1, 6);
@@ -387,10 +404,42 @@ bool Renderer::loadAndGenerateIBL() {
     dispatchIBL(iblEquirectToCubemapPipeline, 0, static_cast<float>(IBL_ENV_CUBE_SIZE),
                 1.0f / static_cast<float>(IBL_ENV_CUBE_SIZE), groupsFor(IBL_ENV_CUBE_SIZE), groupsFor(IBL_ENV_CUBE_SIZE), 6);
 
-    // 8d. Env cube: GENERAL -> SHADER_READ_ONLY so irradiance/prefilter can sample it.
-    recordIBLImageBarrier(cmd, *iblEnvCubeImage, vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal,
+    // 8d. Build the environment mip chain used by GGX importance sampling.
+    recordIBLImageBarrier(cmd, *iblEnvCubeImage, vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal,
                           vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
-                          vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead, 1, 6);
+                          vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead,
+                          1, 6, 0);
+    for (uint32_t mip = 1; mip < IBL_ENV_CUBE_MIPS; ++mip) {
+      recordIBLImageBarrier(cmd, *iblEnvCubeImage, vk::ImageLayout::eGeneral,
+                            vk::ImageLayout::eTransferDstOptimal,
+                            vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eNone,
+                            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite,
+                            1, 6, mip);
+
+      const int32_t srcSize = static_cast<int32_t>(std::max(1u, IBL_ENV_CUBE_SIZE >> (mip - 1)));
+      const int32_t dstSize = static_cast<int32_t>(std::max(1u, IBL_ENV_CUBE_SIZE >> mip));
+      vk::ImageBlit blit{};
+      blit.srcSubresource = {vk::ImageAspectFlagBits::eColor, mip - 1, 0, 6};
+      blit.srcOffsets[0] = vk::Offset3D{0, 0, 0};
+      blit.srcOffsets[1] = vk::Offset3D{srcSize, srcSize, 1};
+      blit.dstSubresource = {vk::ImageAspectFlagBits::eColor, mip, 0, 6};
+      blit.dstOffsets[0] = vk::Offset3D{0, 0, 0};
+      blit.dstOffsets[1] = vk::Offset3D{dstSize, dstSize, 1};
+      cmd.blitImage(*iblEnvCubeImage, vk::ImageLayout::eTransferSrcOptimal,
+                    *iblEnvCubeImage, vk::ImageLayout::eTransferDstOptimal,
+                    blit, vk::Filter::eLinear);
+
+      recordIBLImageBarrier(cmd, *iblEnvCubeImage, vk::ImageLayout::eTransferDstOptimal,
+                            vk::ImageLayout::eTransferSrcOptimal,
+                            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite,
+                            vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead,
+                            1, 6, mip);
+    }
+    recordIBLImageBarrier(cmd, *iblEnvCubeImage, vk::ImageLayout::eTransferSrcOptimal,
+                          vk::ImageLayout::eShaderReadOnlyOptimal,
+                          vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead,
+                          vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead,
+                          IBL_ENV_CUBE_MIPS, 6);
 
     // 8e. Dispatch 1: diffuse irradiance cubemap (hemisphere cosine convolution).
     dispatchIBL(iblIrradiancePipeline, 1, static_cast<float>(IBL_IRRADIANCE_SIZE), 0.0f,

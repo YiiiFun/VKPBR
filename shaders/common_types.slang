@@ -38,7 +38,7 @@ struct UniformBufferObject {
     float4 camPos;
     float exposure;
     float gamma;
-    float prefilteredCubeMipLevels;
+    float iblRotation;
     float scaleIBLAmbient;
     int lightCount;
     int padding0;
@@ -69,9 +69,9 @@ struct UniformBufferObject {
     float4 _rqReservedWorldPos;
     // Ray-query specific: number of materials in materialBuffer (for bounds)
     int materialCount;
-    // IBL controls (dedicated fields — never overload scaleIBLAmbient for this)
+    // IBL controls
     int iblEnabled;     // 1 = sample IBL maps, 0 = constant ambient fallback
-    int iblDebugView;   // 1 = visualize irradiance map only
+    int iblDebugView;   // 0=final, 1=environment, 2=irradiance, 3=prefilter, 4=BRDF LUT
     float iblIntensity; // scales IBL contribution
 };
 

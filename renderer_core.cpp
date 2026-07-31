@@ -461,7 +461,7 @@ bool Renderer::Initialize(const std::string& appName, bool enableValidationLayer
       iblEnabled = false;
       std::cout << "VKPBR_START_IBL: IBL disabled at startup\n";
     } else if (std::strcmp(iblEnv, "debug") == 0) {
-      iblDebugView = true;
+      iblDebugView = 2;
       std::cout << "VKPBR_START_IBL: debug view enabled at startup\n";
     }
   }

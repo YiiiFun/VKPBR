@@ -17,6 +17,7 @@ struct Params {
 [[vk::push_constant]] Params params;
 
 static const float PI = 3.14159265359;
+static const float ENV_CUBE_SIZE = 1024.0;
 
 float3 CubeDir(uint face, float2 uv)
 {
@@ -25,12 +26,12 @@ float3 CubeDir(uint face, float2 uv)
     float3 dir = float3(0.0, 0.0, 0.0);
     switch (face)
     {
-        case 0: dir = float3( 1.0,    v, -u); break;
-        case 1: dir = float3(-1.0,    v,  u); break;
-        case 2: dir = float3(   u,  1.0, -v); break;
-        case 3: dir = float3(   u, -1.0,  v); break;
-        case 4: dir = float3(   u,    v,  1.0); break;
-        case 5: dir = float3(  -u,    v, -1.0); break;
+        case 0: dir = float3( 1.0,   -v, -u); break;
+        case 1: dir = float3(-1.0,   -v,  u); break;
+        case 2: dir = float3(   u,  1.0,  v); break;
+        case 3: dir = float3(   u, -1.0, -v); break;
+        case 4: dir = float3(   u,   -v, 1.0); break;
+        case 5: dir = float3(  -u,   -v,-1.0); break;
     }
     return normalize(dir);
 }
@@ -72,6 +73,14 @@ float3 ImportanceSampleGGX(float2 Xi, float3 N, float roughness)
     return normalize(sampleVec);
 }
 
+float DistributionGGX(float NdotH, float roughness)
+{
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / max(PI * d * d, 1e-6);
+}
+
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
@@ -102,7 +111,16 @@ void main(uint3 id : SV_DispatchThreadID)
         float NdotL = max(dot(N, L), 0.0);
         if (NdotL > 0.0)
         {
-            prefilteredColor += envCube.SampleLevel(L, 0.0).rgb * NdotL;
+            float NdotH = max(dot(N, H), 0.0);
+            float HdotV = max(dot(H, V), 0.0);
+            float D = DistributionGGX(NdotH, roughness);
+            float pdf = max(D * NdotH / max(4.0 * HdotV, 1e-5), 1e-5);
+            float sampleSolidAngle = 1.0 / (float(sampleCount) * pdf);
+            float texelSolidAngle = 4.0 * PI / (6.0 * ENV_CUBE_SIZE * ENV_CUBE_SIZE);
+            float sourceLod = (roughness <= 0.001)
+                ? 0.0
+                : max(0.5 * log2(sampleSolidAngle / texelSolidAngle), 0.0);
+            prefilteredColor += envCube.SampleLevel(L, sourceLod).rgb * NdotL;
             totalWeight += NdotL;
         }
     }
