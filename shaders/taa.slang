@@ -46,8 +46,15 @@ void main(uint3 id : SV_DispatchThreadID)
 
     float2 texel = rcp(params.screenHistoryDepth.xy);
     float2 uv = (float2(id.xy) + 0.5) * texel;
-    float4 current = currentColorTex.SampleLevel(uv, 0.0);
-    float depth = currentDepthTex.SampleLevel(uv, 0.0).r;
+    // Projection jitter moves rasterized features by -jitterPixels. Sample the
+    // jittered inputs at that shifted location so the resolved output remains
+    // on a stable, unjittered pixel grid.
+    float2 currentUV = clamp(
+        uv - params.jitterPixels.xy * texel,
+        texel * 0.5,
+        1.0 - texel * 0.5);
+    float4 current = currentColorTex.SampleLevel(currentUV, 0.0);
+    float depth = currentDepthTex.SampleLevel(currentUV, 0.0).r;
     resolvedDepthOut[id.xy] = depth;
 
     if (params.control.x == 0 || params.tuning.y < 0.5 || depth >= 0.99999) {
@@ -55,15 +62,15 @@ void main(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    float4 currentClip = float4(uv * 2.0 - 1.0, depth, 1.0);
+    float4 currentClip = float4(currentUV * 2.0 - 1.0, depth, 1.0);
     float4 world = mul(params.invCurrentViewProj, currentClip);
     world /= max(abs(world.w), 1e-6);
     float4 previousClip = mul(params.previousViewProj, world);
     float2 previousNdc = previousClip.xy / max(abs(previousClip.w), 1e-6);
-    float2 previousUV = previousNdc * 0.5 + 0.5;
-    float2 jitterDeltaUV = (params.jitterPixels.xy - params.jitterPixels.zw) * texel;
-    float2 motion = uv - previousUV + jitterDeltaUV;
-    previousUV = uv - motion;
+    // History is stored on the stable output grid. Remove the previous
+    // projection jitter before sampling it.
+    float2 previousUV = previousNdc * 0.5 + 0.5 + params.jitterPixels.zw * texel;
+    float2 motion = uv - previousUV;
 
     bool inside = previousClip.w > 0.0 && all(previousUV >= 0.0) && all(previousUV <= 1.0);
     float expectedPreviousDepth = previousClip.z / max(abs(previousClip.w), 1e-6);
@@ -78,7 +85,7 @@ void main(uint3 id : SV_DispatchThreadID)
     for (int y = -1; y <= 1; ++y) {
         [unroll]
         for (int x = -1; x <= 1; ++x) {
-            float2 sampleUV = clamp(uv + float2(x, y) * texel, texel * 0.5, 1.0 - texel * 0.5);
+            float2 sampleUV = clamp(currentUV + float2(x, y) * texel, texel * 0.5, 1.0 - texel * 0.5);
             float3 sampleColor = currentColorTex.SampleLevel(sampleUV, 0.0).rgb;
             float3 sampleYCoCg = RGBToYCoCg(sampleColor);
             neighborhoodMin = min(neighborhoodMin, sampleYCoCg);
