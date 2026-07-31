@@ -155,7 +155,8 @@ struct TAAUniformBufferObject {
   alignas(16) glm::mat4 invCurrentViewProj;
   alignas(16) glm::mat4 previousViewProj;
   alignas(16) glm::vec4 screenHistoryDepth; // width, height, history weight, depth threshold
-  alignas(16) glm::vec4 jitterSharpness;    // current jitter xy in pixels, sharpness, history valid
+  alignas(16) glm::vec4 jitterPixels;        // current jitter xy, previous jitter xy
+  alignas(16) glm::vec4 tuning;              // sharpness, history valid, reserved, reserved
   alignas(16) glm::ivec4 control;           // enabled, debug view, reserved, reserved
 };
 
@@ -2033,10 +2034,11 @@ class Renderer {
     int taaDebugView = 0;
     float taaHistoryWeight = 0.90f;
     float taaDepthThreshold = 0.003f;
-    float taaSharpness = 0.10f;
+    float taaSharpness = 0.0f;
     bool taaHistoryValid = false;
     uint64_t taaFrameIndex = 0;
     glm::vec2 taaCurrentJitter{0.0f};
+    glm::vec2 taaPreviousJitter{0.0f};
     glm::mat4 taaCurrentViewProj{1.0f};
     glm::mat4 taaPreviousViewProj{1.0f};
     RenderMode taaPreviousRenderMode = RenderMode::Rasterization;

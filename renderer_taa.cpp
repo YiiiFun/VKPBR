@@ -329,10 +329,12 @@ void Renderer::updateTAAUniformBuffer(uint32_t frameIndex) {
     static_cast<float>(swapChainExtent.height),
     std::clamp(taaHistoryWeight, 0.0f, 0.98f),
     std::clamp(taaDepthThreshold, 0.0001f, 0.05f));
-  ubo.jitterSharpness = glm::vec4(
-    taaCurrentJitter,
+  ubo.jitterPixels = glm::vec4(taaCurrentJitter, taaPreviousJitter);
+  ubo.tuning = glm::vec4(
     std::clamp(taaSharpness, 0.0f, 0.5f),
-    taaHistoryValid ? 1.0f : 0.0f);
+    taaHistoryValid ? 1.0f : 0.0f,
+    0.0f,
+    0.0f);
   ubo.control = glm::ivec4(taaEnabled ? 1 : 0, taaDebugView, 0, 0);
   std::memcpy(taaUniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));
 }
@@ -424,6 +426,7 @@ void Renderer::dispatchTAA(vk::raii::CommandBuffer& cmd, bool rayQueryPath) {
   taaHistoryDepthLayouts[currentFrame] = vk::ImageLayout::eShaderReadOnlyOptimal;
 
   taaPreviousViewProj = taaCurrentViewProj;
+  taaPreviousJitter = taaCurrentJitter;
   taaPreviousRenderMode = rayQueryPath ? RenderMode::RayQuery : RenderMode::Rasterization;
   taaHistoryValid = true;
   ++taaFrameIndex;
@@ -433,6 +436,7 @@ void Renderer::resetTAAHistory() {
   taaHistoryValid = false;
   taaFrameIndex = 0;
   taaCurrentJitter = glm::vec2(0.0f);
+  taaPreviousJitter = glm::vec2(0.0f);
   taaCurrentViewProj = glm::mat4(1.0f);
   taaPreviousViewProj = glm::mat4(1.0f);
   taaPreviousRenderMode = currentRenderMode;

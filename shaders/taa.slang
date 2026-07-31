@@ -7,7 +7,8 @@ struct TAAParams {
     column_major float4x4 invCurrentViewProj;
     column_major float4x4 previousViewProj;
     float4 screenHistoryDepth; // width, height, history weight, depth threshold
-    float4 jitterSharpness;    // current jitter xy in pixels, sharpness, history valid
+    float4 jitterPixels;        // current jitter xy, previous jitter xy
+    float4 tuning;              // sharpness, history valid, reserved, reserved
     int4 control;              // enabled, debug view, reserved, reserved
 };
 
@@ -49,7 +50,7 @@ void main(uint3 id : SV_DispatchThreadID)
     float depth = currentDepthTex.SampleLevel(uv, 0.0).r;
     resolvedDepthOut[id.xy] = depth;
 
-    if (params.control.x == 0 || params.jitterSharpness.w < 0.5 || depth >= 0.99999) {
+    if (params.control.x == 0 || params.tuning.y < 0.5 || depth >= 0.99999) {
         resolvedColorOut[id.xy] = current;
         return;
     }
@@ -60,7 +61,9 @@ void main(uint3 id : SV_DispatchThreadID)
     float4 previousClip = mul(params.previousViewProj, world);
     float2 previousNdc = previousClip.xy / max(abs(previousClip.w), 1e-6);
     float2 previousUV = previousNdc * 0.5 + 0.5;
-    float2 motion = uv - previousUV;
+    float2 jitterDeltaUV = (params.jitterPixels.xy - params.jitterPixels.zw) * texel;
+    float2 motion = uv - previousUV + jitterDeltaUV;
+    previousUV = uv - motion;
 
     bool inside = previousClip.w > 0.0 && all(previousUV >= 0.0) && all(previousUV <= 1.0);
     float expectedPreviousDepth = previousClip.z / max(abs(previousClip.w), 1e-6);
@@ -93,7 +96,7 @@ void main(uint3 id : SV_DispatchThreadID)
     float3 resolved = lerp(current.rgb, history, historyWeight);
 
     float3 neighborhoodAverage = neighborhoodSum / 9.0;
-    resolved = max(resolved + (current.rgb - neighborhoodAverage) * params.jitterSharpness.z, 0.0);
+    resolved = max(resolved + (current.rgb - neighborhoodAverage) * params.tuning.x, 0.0);
 
     if (params.control.y == 1) {
         resolved = float3(0.5 + motion.x * 32.0, 0.5 + motion.y * 32.0, 0.0);
