@@ -151,6 +151,14 @@ struct SSAOUniformBufferObject {
   alignas(16) glm::vec4 gtaoParams;         // x=directions, y=steps, z=thickness, w=falloff
 };
 
+struct TAAUniformBufferObject {
+  alignas(16) glm::mat4 invCurrentViewProj;
+  alignas(16) glm::mat4 previousViewProj;
+  alignas(16) glm::vec4 screenHistoryDepth; // width, height, history weight, depth threshold
+  alignas(16) glm::vec4 jitterSharpness;    // current jitter xy in pixels, sharpness, history valid
+  alignas(16) glm::ivec4 control;           // enabled, debug view, reserved, reserved
+};
+
 // Ambient occlusion mode selector.
 enum class AOMode : int {
   Off   = 0,
@@ -850,7 +858,10 @@ class Renderer {
 
     // Ray query rendering mode control
     void SetRenderMode(RenderMode mode) {
-      currentRenderMode = mode;
+      if (currentRenderMode != mode) {
+        currentRenderMode = mode;
+        resetTAAHistory();
+      }
     }
     RenderMode GetRenderMode() const {
       return currentRenderMode;
@@ -860,6 +871,7 @@ class Renderer {
     }
     void ToggleRenderMode() {
       currentRenderMode = (currentRenderMode == RenderMode::Rasterization) ? RenderMode::RayQuery : RenderMode::Rasterization;
+      resetTAAHistory();
     }
 
     // Ray query capability getters
@@ -1255,6 +1267,14 @@ class Renderer {
     vk::raii::PipelineLayout gtaoPipelineLayout = nullptr;
     vk::raii::Pipeline gtaoPipeline = nullptr;
 
+    // Temporal anti-aliasing compute pass. Raster and Ray Query use separate
+    // descriptor sets while sharing the same ping-pong history images.
+    vk::raii::DescriptorSetLayout taaDescriptorSetLayout = nullptr;
+    vk::raii::PipelineLayout taaPipelineLayout = nullptr;
+    vk::raii::Pipeline taaPipeline = nullptr;
+    std::vector<vk::raii::DescriptorSet> taaRasterDescriptorSets;
+    std::vector<vk::raii::DescriptorSet> taaRayQueryDescriptorSets;
+
     // Pipeline rendering create info structures (for proper lifetime management)
     vk::PipelineRenderingCreateInfo mainPipelineRenderingCreateInfo;
     vk::PipelineRenderingCreateInfo pbrPipelineRenderingCreateInfo;
@@ -1265,6 +1285,7 @@ class Renderer {
     bool createCompositePipeline();
     bool createSSAOPipelines();
     bool createGTAOPipeline();
+    bool createTAAPipeline();
 
     // Compute pipeline
     vk::raii::DescriptorPool computeDescriptorPool = nullptr;
@@ -1315,6 +1336,21 @@ class Renderer {
     std::vector<vk::raii::Buffer> ssaoUniformBuffers;
     std::vector<std::unique_ptr<MemoryPool::Allocation>> ssaoUniformAllocations;
     std::vector<void *> ssaoUniformBuffersMapped;
+
+    vk::Format taaColorFormat = vk::Format::eR16G16B16A16Sfloat;
+    vk::Format taaDepthFormat = vk::Format::eR32Sfloat;
+    std::vector<vk::raii::Image> taaHistoryImages;
+    std::vector<std::unique_ptr<MemoryPool::Allocation>> taaHistoryImageAllocations;
+    std::vector<vk::raii::ImageView> taaHistoryImageViews;
+    std::vector<vk::ImageLayout> taaHistoryImageLayouts;
+    std::vector<vk::raii::Image> taaHistoryDepthImages;
+    std::vector<std::unique_ptr<MemoryPool::Allocation>> taaHistoryDepthAllocations;
+    std::vector<vk::raii::ImageView> taaHistoryDepthViews;
+    std::vector<vk::ImageLayout> taaHistoryDepthLayouts;
+    vk::raii::Sampler taaSampler{nullptr};
+    std::vector<vk::raii::Buffer> taaUniformBuffers;
+    std::vector<std::unique_ptr<MemoryPool::Allocation>> taaUniformAllocations;
+    std::vector<void *> taaUniformBuffersMapped;
 
     // Forward+ configuration
     bool useForwardPlus = true; // default enabled
@@ -1993,6 +2029,18 @@ class Renderer {
     float gtaoThickness = 0.5f;
     float gtaoFalloff = 0.2f;
 
+    bool taaEnabled = true;
+    int taaDebugView = 0;
+    float taaHistoryWeight = 0.90f;
+    float taaDepthThreshold = 0.003f;
+    float taaSharpness = 0.10f;
+    bool taaHistoryValid = false;
+    uint64_t taaFrameIndex = 0;
+    glm::vec2 taaCurrentJitter{0.0f};
+    glm::mat4 taaCurrentViewProj{1.0f};
+    glm::mat4 taaPreviousViewProj{1.0f};
+    RenderMode taaPreviousRenderMode = RenderMode::Rasterization;
+
     // --- Planar reflections (scaffolding) ---
     bool enablePlanarReflections = false; // UI toggle to enable/disable planar reflections
     float reflectionResolutionScale = 0.5f; // Scale relative to swapchain size
@@ -2121,6 +2169,13 @@ class Renderer {
     void updateSSAODepthInputForFrame(uint32_t frameIndex, vk::ImageView depthView, vk::ImageLayout depthLayout);
     void updateSSAOUniformBuffer(uint32_t frameIndex, CameraComponent *camera);
     void dispatchSSAO(vk::raii::CommandBuffer& cmd);
+    bool createTAAResources();
+    void destroyTAAResources();
+    void createTAADescriptorSets();
+    void updateCompositeSceneInputs();
+    void updateTAAUniformBuffer(uint32_t frameIndex);
+    void dispatchTAA(vk::raii::CommandBuffer& cmd, bool rayQueryPath);
+    void resetTAAHistory();
     bool createMeshResources(MeshComponent* meshComponent, bool deferUpload = false);
     bool createUniformBuffers(Entity* entity);
     bool createDescriptorPool();

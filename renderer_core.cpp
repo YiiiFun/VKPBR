@@ -270,6 +270,13 @@ bool Renderer::Initialize(const std::string& appName, bool enableValidationLayer
     LOGI("GTAO pipeline created successfully");
   }
 
+  LOGI("Creating TAA pipeline...");
+  if (!createTAAPipeline()) {
+    LOGE("Failed to create TAA pipeline");
+    return false;
+  }
+  LOGI("TAA pipeline created successfully");
+
   // Create shared resources for rendering compute passes.
   LOGI("Creating compute resources...");
   if (!createComputeResources()) {
@@ -372,12 +379,20 @@ bool Renderer::Initialize(const std::string& appName, bool enableValidationLayer
   }
   LOGI("Opaque scene color resources created successfully");
 
+  LOGI("Creating TAA resources...");
+  if (!createTAAResources()) {
+    LOGE("Failed to create TAA resources");
+    return false;
+  }
+  LOGI("TAA resources created successfully");
+
   LOGI("Creating transparent descriptor sets...");
   createTransparentDescriptorSets();
   LOGI("Transparent descriptor sets created");
 
   LOGI("Creating composite descriptor sets...");
   createCompositeDescriptorSets();
+  updateCompositeSceneInputs();
   LOGI("Composite descriptor sets created");
 
   // Create default texture resources
@@ -541,6 +556,8 @@ void Renderer::Cleanup() {
   transparentFallbackDescriptorSets.clear();
   compositeDescriptorSets.clear();
   rqCompositeDescriptorSets.clear();
+  taaRasterDescriptorSets.clear();
+  taaRayQueryDescriptorSets.clear();
 
   // 3.5) Clear ray query descriptor sets BEFORE destroying descriptor pool
   // Without this, rayQueryDescriptorSets' RAII destructor tries to free them after
@@ -560,6 +577,7 @@ void Renderer::Cleanup() {
   glassGraphicsPipeline = nullptr;
   lightingPipeline = nullptr;
   compositePipeline = nullptr;
+  taaPipeline = nullptr;
   forwardPlusPipeline = nullptr;
   depthPrepassPipeline = nullptr;
 
@@ -567,6 +585,7 @@ void Renderer::Cleanup() {
   pbrPipelineLayout = nullptr;
   lightingPipelineLayout = nullptr;
   compositePipelineLayout = nullptr;
+  taaPipelineLayout = nullptr;
   pbrTransparentPipelineLayout = nullptr;
   forwardPlusPipelineLayout = nullptr;
 
@@ -599,6 +618,7 @@ void Renderer::Cleanup() {
   pbrDescriptorSetLayout = nullptr;
   transparentDescriptorSetLayout = nullptr;
   compositeDescriptorSetLayout = nullptr;
+  taaDescriptorSetLayout = nullptr;
   forwardPlusDescriptorSetLayout = nullptr;
   rayQueryDescriptorSetLayout = nullptr;
 

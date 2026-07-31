@@ -65,6 +65,17 @@ glm::vec3 ColorTemperatureToRgb(float kelvin) {
 
   return glm::clamp(glm::vec3(red, green, blue), 0.0f, 255.0f) / 255.0f;
 }
+
+float Halton(uint64_t index, uint32_t base) {
+  float result = 0.0f;
+  float fraction = 1.0f;
+  while (index > 0) {
+    fraction /= static_cast<float>(base);
+    result += fraction * static_cast<float>(index % base);
+    index /= base;
+  }
+  return result;
+}
 }
 
 // ===================== Culling helpers implementation =====================
@@ -698,6 +709,7 @@ void Renderer::cleanupSwapChain() {
   compositeDescriptorSets.clear();
   rqCompositeDescriptorSets.clear();
   destroySSAOResources();
+  destroyTAAResources();
 
   // Clean up swap chain image views
   swapChainImageViews.clear();
@@ -721,6 +733,7 @@ void Renderer::cleanupSwapChain() {
   ssaoPipeline = vk::raii::Pipeline(nullptr);
   ssaoBlurPipeline = vk::raii::Pipeline(nullptr);
   gtaoPipeline = vk::raii::Pipeline(nullptr);
+  taaPipeline = vk::raii::Pipeline(nullptr);
 
   // Clean up pipeline layouts
   pipelineLayout = vk::raii::PipelineLayout(nullptr);
@@ -731,6 +744,7 @@ void Renderer::cleanupSwapChain() {
   ssaoPipelineLayout = vk::raii::PipelineLayout(nullptr);
   ssaoBlurPipelineLayout = vk::raii::PipelineLayout(nullptr);
   gtaoPipelineLayout = vk::raii::PipelineLayout(nullptr);
+  taaPipelineLayout = vk::raii::PipelineLayout(nullptr);
 
   // Clean up sync objects (they need to be recreated with new swap chain image count)
   imageAvailableSemaphores.clear();
@@ -840,10 +854,10 @@ void Renderer::recreateSwapChain() {
   createCompositePipeline();
   createSSAOPipelines();
   createGTAOPipeline();
+  createTAAPipeline();
   createSSAOResources();
   createTransparentDescriptorSets();
   createTransparentFallbackDescriptorSets();
-  createCompositeDescriptorSets();
 
   // Recreate Forward+ specific pipelines/resources and resize tile buffers for new extent
   if (useForwardPlus) {
@@ -865,6 +879,12 @@ void Renderer::recreateSwapChain() {
       std::cerr << "Warning: Failed to recreate ray query resources after swapchain recreation\n";
     }
   }
+
+  if (!createTAAResources()) {
+    std::cerr << "Warning: Failed to recreate TAA resources after swapchain recreation\n";
+  }
+  createCompositeDescriptorSets();
+  updateCompositeSceneInputs();
 
   // Recreate descriptor sets for all entities after swapchain/pipeline rebuild
   for (const auto& kv : entityResources) {
@@ -900,9 +920,25 @@ void Renderer::prepareFrameUboTemplate(CameraComponent* camera, ImGuiSystem* img
   frameUboTemplate = UniformBufferObject{};
   if (!camera) return;
 
+  if (taaPreviousRenderMode != currentRenderMode) {
+    resetTAAHistory();
+  }
+
+  camera->ForceViewMatrixUpdate();
+
   frameUboTemplate.view = camera->GetViewMatrix();
   frameUboTemplate.proj = camera->GetProjectionMatrix();
   frameUboTemplate.proj[1][1] *= -1; // Flip Y for Vulkan
+  taaCurrentJitter = glm::vec2(0.0f);
+  if (taaEnabled && !IsLoading() && swapChainExtent.width > 0 && swapChainExtent.height > 0) {
+    const uint64_t sampleIndex = (taaFrameIndex % 8u) + 1u;
+    taaCurrentJitter = glm::vec2(
+      Halton(sampleIndex, 2u) - 0.5f,
+      Halton(sampleIndex, 3u) - 0.5f);
+    frameUboTemplate.proj[2][0] += 2.0f * taaCurrentJitter.x / static_cast<float>(swapChainExtent.width);
+    frameUboTemplate.proj[2][1] += 2.0f * taaCurrentJitter.y / static_cast<float>(swapChainExtent.height);
+  }
+  taaCurrentViewProj = frameUboTemplate.proj * frameUboTemplate.view;
   frameUboTemplate.camPos = glm::vec4(camera->GetPosition(), 1.0f);
 
   frameUboTemplate.lightCount = static_cast<int>(lastFrameLightCount);
@@ -956,8 +992,7 @@ void Renderer::updateSSAOUniformBuffer(uint32_t frameIndex, CameraComponent *cam
     return;
 
   SSAOUniformBufferObject ubo{};
-  ubo.proj = camera->GetProjectionMatrix();
-  ubo.proj[1][1] *= -1.0f;
+  ubo.proj = frameUboTemplate.proj;
   ubo.invProj = glm::inverse(ubo.proj);
   ubo.screenRadiusBias = glm::vec4(
     static_cast<float>(swapChainExtent.width),
@@ -2095,15 +2130,9 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         RayQueryUniformBufferObject ubo{};
         ubo.model = glm::mat4(1.0f); // Identity - not used for ray query
 
-        // Force view matrix update to reflect current camera position
-        // (the dirty flag isn't automatically set when camera position changes)
-        camera->ForceViewMatrixUpdate();
-
-        // Get camera matrices
-        glm::mat4 camView = camera->GetViewMatrix();
-        ubo.view = camView;
-        ubo.proj = camera->GetProjectionMatrix();
-        ubo.proj[1][1] *= -1; // Flip Y for Vulkan
+        // Use the same jittered matrices as rasterization and TAA reprojection.
+        ubo.view = frameUboTemplate.view;
+        ubo.proj = frameUboTemplate.proj;
         ubo.camPos = glm::vec4(camera->GetPosition(), 1.0f);
         // Clamp to sane ranges to avoid black output (exposure=0 → 1-exp(0)=0)
         ubo.exposure = std::clamp(exposure, 0.2f, 4.0f);
@@ -2151,12 +2180,11 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       uint32_t workgroupsY = (swapChainExtent.height + 7) / 8;
       commandBuffers[currentFrame].dispatch(workgroupsX, workgroupsY, 1);
 
-      // Barrier: wait for compute shader to finish writing to output image,
-      // then make it readable by fragment shader for sampling in composite pass
+      // Make the Ray Query color readable by TAA.
       vk::ImageMemoryBarrier2 rqToSample{};
       rqToSample.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
       rqToSample.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
-      rqToSample.dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader;
+      rqToSample.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
       rqToSample.dstAccessMask = vk::AccessFlagBits2::eShaderRead;
       rqToSample.oldLayout = vk::ImageLayout::eGeneral;
       rqToSample.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
@@ -2171,7 +2199,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       commandBuffers[currentFrame].pipelineBarrier2(depRQToSample);
 
       const bool runRayQuerySSAO = (ssaoEnabled || ssaoDebugView) && !IsLoading() && !!*rayQueryDepthImageView;
-      if (runRayQuerySSAO) {
+      if (!!*rayQueryDepthImageView) {
         vk::ImageMemoryBarrier2 rqDepthToSample{};
         rqDepthToSample.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
         rqDepthToSample.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
@@ -2189,9 +2217,13 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         depRQDepthToSample.pImageMemoryBarriers = &rqDepthToSample;
         commandBuffers[currentFrame].pipelineBarrier2(depRQDepthToSample);
 
-        updateSSAODepthInputForFrame(currentFrame, *rayQueryDepthImageView, vk::ImageLayout::eShaderReadOnlyOptimal);
-        dispatchSSAO(commandBuffers[currentFrame]);
+        if (runRayQuerySSAO) {
+          updateSSAODepthInputForFrame(currentFrame, *rayQueryDepthImageView, vk::ImageLayout::eShaderReadOnlyOptimal);
+          dispatchSSAO(commandBuffers[currentFrame]);
+        }
       }
+
+      dispatchTAA(commandBuffers[currentFrame], true);
 
       // Composite fullscreen: sample rayQueryOutputImage to the swapchain using the composite pipeline
       // Transition swapchain image to COLOR_ATTACHMENT_OPTIMAL
@@ -2275,7 +2307,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       swapchainToPresent.subresourceRange.layerCount = 1;
 
       vk::ImageMemoryBarrier2 rqBackToGeneral{};
-      rqBackToGeneral.srcStageMask = vk::PipelineStageFlagBits2::eFragmentShader;
+      rqBackToGeneral.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader;
       rqBackToGeneral.srcAccessMask = vk::AccessFlagBits2::eShaderRead;
       rqBackToGeneral.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
       rqBackToGeneral.dstAccessMask = vk::AccessFlagBits2::eShaderWrite;
@@ -2288,7 +2320,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
 
       std::array<vk::ImageMemoryBarrier2, 3> barriers{swapchainToPresent, rqBackToGeneral, vk::ImageMemoryBarrier2{}};
       uint32_t barrierCount = 2;
-      if (runRayQuerySSAO) {
+      if (!!*rayQueryDepthImageView) {
         vk::ImageMemoryBarrier2 rqDepthBackToGeneral{};
         rqDepthBackToGeneral.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
         rqDepthBackToGeneral.srcAccessMask = vk::AccessFlagBits2::eShaderRead;
@@ -2359,6 +2391,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
           RenderMode newMode = (currentMode == 1) ? RenderMode::RayQuery : RenderMode::Rasterization;
           if (newMode != currentRenderMode) {
             currentRenderMode = newMode;
+            resetTAAHistory();
             std::cout << "Switched to " << modeNames[currentMode] << " mode\n";
 
             // Request acceleration structure build when switching to ray query mode
@@ -2544,6 +2577,22 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       ImGui::BeginDisabled(aoMode == AOMode::Off);
       ImGui::SliderFloat("AO strength", &ssaoCompositeStrength, 0.0f, 1.0f, "%.2f");
       ImGui::EndDisabled();
+
+      ImGui::Separator();
+      if (ImGui::CollapsingHeader("Temporal Anti-Aliasing", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::Checkbox("Enable TAA", &taaEnabled)) {
+          resetTAAHistory();
+        }
+        ImGui::BeginDisabled(!taaEnabled);
+        static const char* taaDebugModes[] = {
+          "Final lighting", "Motion vectors", "History weight", "Disocclusion"
+        };
+        ImGui::Combo("TAA debug view", &taaDebugView, taaDebugModes, IM_ARRAYSIZE(taaDebugModes));
+        ImGui::SliderFloat("History weight", &taaHistoryWeight, 0.0f, 0.98f, "%.2f");
+        ImGui::SliderFloat("Depth rejection", &taaDepthThreshold, 0.0001f, 0.02f, "%.4f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("TAA sharpness", &taaSharpness, 0.0f, 0.5f, "%.2f");
+        ImGui::EndDisabled();
+      }
 
       // === IBL CONTROLS ===
       ImGui::Separator();
@@ -2963,7 +3012,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
     commandBuffers[currentFrame].endRendering();
 
     const bool runSSAO = (ssaoEnabled || ssaoDebugView) && !IsLoading();
-    if (runSSAO) {
+    {
       vk::ImageMemoryBarrier2 depthToSSAOSample{
         .srcStageMask = vk::PipelineStageFlagBits2::eLateFragmentTests | vk::PipelineStageFlagBits2::eEarlyFragmentTests,
         .srcAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentWrite | vk::AccessFlagBits2::eDepthStencilAttachmentRead,
@@ -2979,8 +3028,10 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       vk::DependencyInfo depDepthToSSAO{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &depthToSSAOSample};
       commandBuffers[currentFrame].pipelineBarrier2(depDepthToSSAO);
 
-      updateSSAODepthInputForFrame(currentFrame, *depthImageView, vk::ImageLayout::eDepthStencilReadOnlyOptimal);
-      dispatchSSAO(commandBuffers[currentFrame]);
+      if (runSSAO) {
+        updateSSAODepthInputForFrame(currentFrame, *depthImageView, vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+        dispatchSSAO(commandBuffers[currentFrame]);
+      }
     }
     // PASS 1b: PRESENT – composite path
     {
@@ -2988,7 +3039,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       vk::ImageMemoryBarrier2 opaqueToSample2{
         .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
         .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
         .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
         .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
         .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -3002,6 +3053,8 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       if (currentFrame < opaqueSceneColorImageLayouts.size()) {
         opaqueSceneColorImageLayouts[currentFrame] = vk::ImageLayout::eShaderReadOnlyOptimal;
       }
+
+      dispatchTAA(commandBuffers[currentFrame], false);
 
       // Make the swapchain image ready for color attachment output and clear it (Sync2)
       vk::ImageMemoryBarrier2 swapchainToColor2{
@@ -3076,7 +3129,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
       // Restore depth attachment pointer for subsequent passes
       renderingInfo.pDepthAttachment = savedDepthPtr;
     }
-    if (runSSAO) {
+    {
       vk::ImageMemoryBarrier2 depthBackToAttachment{
         .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
         .srcAccessMask = vk::AccessFlagBits2::eShaderRead,
@@ -3094,6 +3147,18 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
     }
     // PASS 2: RENDER TRANSPARENT OBJECTS TO THE SWAPCHAIN
     {
+      // Transparent surfaces are composited after TAA, so keep their projection
+      // stable instead of exposing the sub-pixel Halton jitter directly.
+      if (taaEnabled && camera && !transparentJobs.empty()) {
+        const glm::mat4 jitteredProjection = frameUboTemplate.proj;
+        frameUboTemplate.proj = camera->GetProjectionMatrix();
+        frameUboTemplate.proj[1][1] *= -1.0f;
+        for (const auto& job : transparentJobs) {
+          updateUniformBuffer(currentFrame, job.entity, job.entityRes, camera, job.transformComp);
+        }
+        frameUboTemplate.proj = jitteredProjection;
+      }
+
       // Ensure depth attachment is bound again for the transparent pass
       renderingInfo.pDepthAttachment = &depthAttachment;
       colorAttachments[0].imageView = *swapChainImageViews[imageIndex];

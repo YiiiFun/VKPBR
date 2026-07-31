@@ -1311,8 +1311,8 @@ bool Renderer::createDescriptorPool() {
     // Acceleration structure descriptors: Ray query needs 1 TLAS descriptor per frame
     const uint32_t accelerationStructureDescriptors = MAX_FRAMES_IN_FLIGHT;
 
-    // Storage image descriptors: Ray query color/depth outputs plus SSAO raw/blur outputs per frame.
-    const uint32_t storageImageDescriptors = MAX_FRAMES_IN_FLIGHT * 4u;
+    // Storage image descriptors: Ray Query, AO, and two TAA descriptor families.
+    const uint32_t storageImageDescriptors = MAX_FRAMES_IN_FLIGHT * 12u;
 
     // Reserve extra combined image sampler capacity for Ray Query binding 6 (baseColor texture array)
     const uint32_t rqTexDescriptors = MAX_FRAMES_IN_FLIGHT * RQ_MAX_TEX;
@@ -1323,8 +1323,8 @@ bool Renderer::createDescriptorPool() {
       },
       vk::DescriptorPoolSize{
         .type = vk::DescriptorType::eCombinedImageSampler,
-        // +8/frame spare: reflection sampler + Ray Query IBL bindings 8/9/10 + margin
-        .descriptorCount = textureDescriptors + rqTexDescriptors + MAX_FRAMES_IN_FLIGHT * 8u
+        // Includes AO/composite inputs, IBL bindings, and TAA current/history inputs.
+        .descriptorCount = textureDescriptors + rqTexDescriptors + MAX_FRAMES_IN_FLIGHT * 20u
       },
       vk::DescriptorPoolSize{
         .type = vk::DescriptorType::eStorageBuffer,
