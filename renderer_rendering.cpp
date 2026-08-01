@@ -931,10 +931,10 @@ void Renderer::prepareFrameUboTemplate(CameraComponent* camera, ImGuiSystem* img
   frameUboTemplate.proj[1][1] *= -1; // Flip Y for Vulkan
   taaCurrentJitter = glm::vec2(0.0f);
   if (taaEnabled && !IsLoading() && swapChainExtent.width > 0 && swapChainExtent.height > 0) {
-    const uint64_t sampleIndex = (taaFrameIndex % 8u) + 1u;
+    const uint64_t sampleIndex = (taaFrameIndex % 16u) + 1u;
     taaCurrentJitter = glm::vec2(
       Halton(sampleIndex, 2u) - 0.5f,
-      Halton(sampleIndex, 3u) - 0.5f);
+      Halton(sampleIndex, 3u) - 0.5f) * std::clamp(taaJitterSpread, 0.0f, 1.0f);
     frameUboTemplate.proj[2][0] += 2.0f * taaCurrentJitter.x / static_cast<float>(swapChainExtent.width);
     frameUboTemplate.proj[2][1] += 2.0f * taaCurrentJitter.y / static_cast<float>(swapChainExtent.height);
   }
@@ -2589,6 +2589,7 @@ void Renderer::Render(const std::vector<Entity *>& entities, CameraComponent* ca
         };
         ImGui::Combo("TAA debug view", &taaDebugView, taaDebugModes, IM_ARRAYSIZE(taaDebugModes));
         ImGui::SliderFloat("History weight", &taaHistoryWeight, 0.0f, 0.98f, "%.2f");
+        ImGui::SliderFloat("Jitter spread", &taaJitterSpread, 0.0f, 1.0f, "%.2f");
         ImGui::SliderFloat("Depth rejection", &taaDepthThreshold, 0.0001f, 0.02f, "%.4f", ImGuiSliderFlags_Logarithmic);
         ImGui::SliderFloat("TAA sharpness", &taaSharpness, 0.0f, 0.5f, "%.2f");
         ImGui::EndDisabled();

@@ -95,7 +95,16 @@ void main(uint3 id : SV_DispatchThreadID)
     }
 
     float3 history = historyColorTex.SampleLevel(previousUV, 0.0).rgb;
-    history = YCoCgToRGB(clamp(RGBToYCoCg(history), neighborhoodMin, neighborhoodMax));
+    float3 neighborhoodCenter = 0.5 * (neighborhoodMin + neighborhoodMax);
+    float3 neighborhoodExtent = 0.5 * (neighborhoodMax - neighborhoodMin);
+    // A small expansion avoids clipping valid static history every time the
+    // sub-pixel sample pattern changes on thin geometry and textured facades.
+    float3 clipPadding = max(neighborhoodExtent * 0.25, float3(0.002, 0.001, 0.001));
+    float3 historyYCoCg = clamp(
+        RGBToYCoCg(history),
+        neighborhoodCenter - neighborhoodExtent - clipPadding,
+        neighborhoodCenter + neighborhoodExtent + clipPadding);
+    history = YCoCgToRGB(historyYCoCg);
 
     float motionPixels = length(motion * params.screenHistoryDepth.xy);
     float motionConfidence = saturate(1.0 - motionPixels * 0.08);

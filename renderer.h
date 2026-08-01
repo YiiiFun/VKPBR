@@ -2032,9 +2032,10 @@ class Renderer {
 
     bool taaEnabled = true;
     int taaDebugView = 0;
-    float taaHistoryWeight = 0.90f;
+    float taaHistoryWeight = 0.95f;
     float taaDepthThreshold = 0.003f;
     float taaSharpness = 0.0f;
+    float taaJitterSpread = 0.35f;
     bool taaHistoryValid = false;
     uint64_t taaFrameIndex = 0;
     glm::vec2 taaCurrentJitter{0.0f};
