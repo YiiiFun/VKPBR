@@ -28,22 +28,29 @@ VKPBR 是一个使用 C++20 编写的桌面实时渲染器，用于系统实践�
 
 ## 渲染效果
 
-README 场景图正在准备中。为保证后续图片视角稳定、可直接对比，[截图清单](docs/images/README.md) 已给出建议机位、文件名和捕获设置。
+<img src="docs/images/bistro-day-ibl.jpg" alt="启用 Ray Query 光照与 HDR IBL 的 Bistro 日景" width="100%">
 
-<!--
-<img src="docs/images/bistro-night-ray-query.png" alt="使用 Ray Query 灯光渲染的 Bistro 夜景" width="100%">
+<p align="center"><b>Ray Query · 日景</b><br>硬阴影、反射/折射与 Split-Sum HDR IBL。</p>
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/bistro-day-raster.png" alt="光栅化 Bistro 日景"></td>
-    <td width="50%"><img src="docs/images/bistro-night-ray-query.png" alt="Ray Query Bistro 夜景"></td>
+    <td width="50%"><img src="docs/images/bistro-day-ray-query.jpg" alt="启用硬阴影、反射和折射的 Bistro 日景"></td>
+    <td width="50%"><img src="docs/images/bistro-night-ray-query.jpg" alt="启用局部灯光、Ray Query 阴影和 Mipmap 的 Bistro 夜景"></td>
   </tr>
   <tr>
-    <td align="center"><b>光栅化 · 日景</b><br>PBR、Forward+、IBL、GTAO 与 TAA</td>
-    <td align="center"><b>Ray Query · 夜景</b><br>加速结构、局部光源阴影、反射与折射</td>
+    <td align="center"><b>Ray Query · 直接光照</b><br>硬阴影与反射/折射查询</td>
+    <td align="center"><b>Ray Query · 夜景</b><br>路灯分组、局部阴影与 Mipmap 采样</td>
   </tr>
 </table>
--->
+
+<details>
+<summary><b>光栅化与相机实时控制</b></summary>
+<br>
+<img src="docs/images/bistro-raster-controls.jpg" alt="光栅化 Phong 基线与 Vulkan 渲染器、相机控制面板" width="100%">
+<p align="center">光栅化 Phong 基线，以及固定相机、剔除/LOD 和纹理采样控制。</p>
+</details>
+
+以上截图使用相同相机位置，便于直接比较光照变化。TAA 的主要收益是运动过程中的时域稳定性，因此不使用单张静态截图作为效果证明。
 
 ## 渲染流程
 
@@ -116,6 +123,8 @@ cmake --build --preset mingw64-debug
 | **TAA debug view** | 查看最终结果、运动矢量、历史权重或反遮挡区域 |
 | **IBL debug view** | 查看环境图、辐照度图、预过滤图或 BRDF LUT |
 | **Day/Night preset** | 在 Ray Query 模式下设置 Bistro 灯组 |
+
+HDR IBL 与 TAA 默认关闭，使程序首先呈现稳定基线；需要时可在 Renderer 面板中分别开启。
 
 默认模型路径在 [`main.cpp`](main.cpp) 中选择。Bistro 加载语句旁边已经列出其他测试场景，每次启用一个即可。
 

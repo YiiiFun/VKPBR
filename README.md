@@ -28,22 +28,29 @@ VKPBR is a C++20 desktop renderer built to explore modern real-time rendering wi
 
 ## Gallery
 
-Render screenshots are being prepared. The exact camera setups, filenames, and capture settings are listed in the [screenshot checklist](docs/images/README.md) so that later images can be compared from stable viewpoints.
+<img src="docs/images/bistro-day-ibl.jpg" alt="Bistro daytime scene with Ray Query lighting and HDR IBL" width="100%">
 
-<!--
-<img src="docs/images/bistro-night-ray-query.png" alt="Bistro night scene rendered with Ray Query lighting" width="100%">
+<p align="center"><b>Ray Query · Day</b><br>Hard shadows, reflections/refraction and Split-Sum HDR IBL.</p>
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/bistro-day-raster.png" alt="Bistro day scene rendered with rasterization"></td>
-    <td width="50%"><img src="docs/images/bistro-night-ray-query.png" alt="Bistro night scene rendered with Ray Query"></td>
+    <td width="50%"><img src="docs/images/bistro-day-ray-query.jpg" alt="Bistro daytime Ray Query scene with hard shadows, reflections and refraction"></td>
+    <td width="50%"><img src="docs/images/bistro-night-ray-query.jpg" alt="Bistro night scene with local lights, Ray Query shadows and mipmap sampling"></td>
   </tr>
   <tr>
-    <td align="center"><b>Rasterization · Day</b><br>PBR, Forward+, IBL, GTAO and TAA</td>
-    <td align="center"><b>Ray Query · Night</b><br>Acceleration structures, local-light shadows, reflections and refraction</td>
+    <td align="center"><b>Ray Query · Direct Lighting</b><br>Hard shadows with reflection and refraction queries</td>
+    <td align="center"><b>Ray Query · Night</b><br>Street-light groups, local shadows and mipmap sampling</td>
   </tr>
 </table>
--->
+
+<details>
+<summary><b>Live raster and camera controls</b></summary>
+<br>
+<img src="docs/images/bistro-raster-controls.jpg" alt="Raster Phong baseline with Vulkan renderer and camera controls" width="100%">
+<p align="center">Raster Phong baseline, fixed camera, culling/LOD and texture-sampling controls.</p>
+</details>
+
+The captures use the same camera position so lighting changes can be compared directly. TAA is intentionally not represented by a still-image comparison because its main benefit is temporal stability during motion.
 
 ## Rendering Pipeline
 
@@ -116,6 +123,8 @@ Open the repository root in VS Code and select **Debug VKPBR (MinGW64)**. The in
 | **TAA debug view** | Inspect final lighting, motion vectors, history weight, or disocclusion |
 | **IBL debug view** | Inspect the environment, irradiance, prefilter map, or BRDF LUT |
 | **Day/Night preset** | Configure the Bistro light groups in Ray Query mode |
+
+HDR IBL and TAA start disabled, providing a stable baseline before either effect is enabled from the Renderer panel.
 
 The default model path is selected in [`main.cpp`](main.cpp). Alternative sample scenes are already listed beside the Bistro load call and can be enabled one at a time.
 

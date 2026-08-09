@@ -6,3 +6,4 @@
 /shaders/*.spv
 imgui.ini
 *.log
+/docs/images/*.png
