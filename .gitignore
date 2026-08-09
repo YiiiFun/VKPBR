@@ -2,5 +2,7 @@
 /install/
 /crashes/
 /.tools/
+/.workbuddy/
 /shaders/*.spv
+imgui.ini
 *.log
