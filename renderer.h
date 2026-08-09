@@ -1803,7 +1803,7 @@ class Renderer {
     // iblInitialized: GPU maps generated successfully (gates UI + descriptor binding)
     // iblEnabled:     user toggle; shader reads ubo.iblEnabled (never inferred from intensity)
     bool iblInitialized = false;
-    bool iblEnabled = true;
+    bool iblEnabled = false;
     float iblIntensity = 0.5f;
     int iblDebugView = 0;
     float iblRotationDegrees = 0.0f;
@@ -2030,7 +2030,7 @@ class Renderer {
     float gtaoThickness = 0.5f;
     float gtaoFalloff = 0.2f;
 
-    bool taaEnabled = true;
+    bool taaEnabled = false;
     int taaDebugView = 0;
     float taaHistoryWeight = 0.95f;
     float taaDepthThreshold = 0.003f;
